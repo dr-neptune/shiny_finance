@@ -1,0 +1,308 @@
+
+```{r}
+library(tidyverse)
+library(xts)
+library(quantmod)
+library(lubridate)
+library(readxl)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+library(tibbletime)
+library(quantmod)
+library(PerformanceAnalytics)
+```
+
+# Introduction
+
+**xts**
+
+xts stands for extensible time series. An xts object is a matric that always has a time index for the order of the data. Index columns are considered column 0, and we can access it with the index() function. 
+
+In the xts world we will also use the following packages:
+
+**quantmod**
+
+This is how we access the internet and pull in pricing data. That data arrives formatted as an xts object.
+
+**PerformanceAnalytics**
+
+This has several useful functions for analyzing portfolio performance in an xts object, such as StdDev(), SharpeRatio(), SortinoRatio(), CAPM.Beta(). 
+
+**tidyquant**
+
+This includes the tidyquant, timetk, and tibbletime packages. This takes a lot of the best features from xts and PerformanceAnalytics and allows us to apply it to a tidy data frame without having the convert the frame to a tidy object. 
+
+### Data Visualization
+
+We will generally visualize xts objects with the highcharter package and tidy objects with ggplot.
+
+### Shiny Applications
+
+Each chapter will end with a shiny app. We will build the following shiny apps:
+
+1. Portfolio Returns
+2. Portfolio Standard Deviation
+3. Skewness and Kurtosis of Returns
+4. Sharpe Ratio
+5. CAPM Beta
+6. Fama French Factor Model
+7. Asset Contribution to Portfolio Standard Deviation
+8. Monte Carlo Simulation
+
+# Returns 
+
+We wish to take raw price data for 5 individual assets and transform them into monthly returns for a single portfolio. Our portfolio will consist of the following exchange traded funds:
+
+- SPY (S&P 500 ETF) weighted 25%
+- EFA (A non-US equities ETF) weighted 25%
+- IJS (a small cap value ETF) weighted 20% 
+- EEM (an emerging markets ETF) weighted 20%
+- AGG (A bond ETF) weighted 10% 
+
+Our process will look something like this:
+
+1. Import daily prices from the internet, in a csv or xls file format
+2. Transform daily prices to monthly prices
+3. Transform monthly prices to monthly returns 
+4. Visualize portfolio returns 
+5. Save the data objects for use throughout the book 
+
+# Asset Prices to Returns 
+
+Lets import the data. We will save it to xts objects called prices.
+
+```{r}
+symbols <- c("SPY", "EFA", "IJS", "EEM", "AGG")
+```
+
+We will pass these symbols to yahoo finance via the getSymbols functiion in quantmod. This returns an object with the opening price, closing price, adjusted price, daily highs, lows and volume for each ticker
+
+```{r}
+prices <- getSymbols(symbols,
+           src = "yahoo",
+           from = "2012-12-31",
+           to = Sys.Date(),
+           auto.assign = TRUE,
+           warnings = FALSE) %>%
+    # get the adjusted prices 
+    map(., ~ Ad(get(.x))) %>%
+    # merge into one xts object
+    reduce(merge) %>%
+    # set column names to be the symbols
+    `colnames<-`(symbols)
+```
+
+We should also make a function for loading csv files in and coercing them to xts objects with the correct dates 
+
+```{r}
+load_xts <- function(file_name) {
+    if (tools::file_ext(file_name) == "csv") {
+        read_csv(file_name,
+                 col_types = cols(date = col_date(format = "%Y-%m-%d"))) %>%
+            tk_xts(date_var = date)
+    } else if (tools::file_ext(file_name) == "xlsx") {
+        read_excel(file_name,
+                   col_types = c("text", rep("numeric", 5))) %>%
+            mutate(date = ymd(date)) %>%
+            tk_xts(date_var = date)}}
+
+fs::dir_ls()
+    
+load_xts("repfin.csv")
+prices <- load_xts("repfin.xlsx")
+
+prices %>% head()
+```
+
+## Converting Daily Prices to Monthly Returns in the xts World
+
+Next we will convert daily prices to monthly log returns. The first observation is December 31st, 2012 -- the last trading day of that year. We want to convert our daily prices to monthly log returns based on the last reading of each month. 
+
+```{r}
+prices %>%
+    to.monthly(indexAt = "lastof",
+               OHLC = FALSE) -> prices_monthly
+
+prices_monthly %>% head()
+```
+
+We have moved from an xts object of daily prices to an xts object of monthly prices. We now have only one reading per month, the last day. 
+
+Now we can call Return.calculate to convert the returns and save
+
+```{r}
+# method = log returns log returns
+Return.calculate(prices_monthly,
+                 method = "log") %>%
+    na.omit() -> asset_returns_xts
+
+asset_returns_xts %>% head()
+
+# get simple returns
+Return.calculate(prices_monthly,
+                 method = "discrete") %>%
+    na.omit() %>%
+    head()
+```
+
+We have now imported daily prices, trimmed to adjusted prices, moved to monthly prices, and transformed to monthly log returns with the xts api
+
+# Converting Daily Prices to Monthly Returns in the tidyverse
+
+```{r}
+prices %>%
+    to.monthly(indexAt = "lastof", OHLC = FALSE) %>%
+    data.frame(date = index(.)) %>%
+    remove_rownames() %>%
+    gather(asset, prices, -date) %>%
+    group_by(asset) %>%
+    mutate(returns = log(prices) - log(lag(prices))) %>%
+    select(-prices) %>%
+    spread(asset, returns) %>%
+    select(date, symbols) %>%
+    na.omit() -> asset_returns_dplyr
+```
+
+# Converting Daily Prices to Monthly Returns in the tidyquant World
+
+We will use the tk_tbl function from the timetk package. 
+
+```{r}
+prices %>%
+    # convert xts to tibble
+    tk_tbl(preserve_index = TRUE,
+           rename_index = "date") %>%
+    gather(asset, prices, -date) %>%
+    group_by(asset) %>%
+    tq_transmute(mutate_fun = periodReturn,
+                 period = "monthly",
+                 type = "log") %>%
+    spread(asset, monthly.returns) %>%
+    select(date, symbols) %>%
+    slice(-1) -> asset_returns_tq_builtin
+```
+
+# Converting Daily Prices to Monthly Returns with tibbletime
+
+```{r}
+prices %>%
+    tk_tbl(preserve_index = TRUE,
+           rename_index = "date") %>%
+    as_tbl_time(index = date) %>%
+    as_period(period = "month",
+              side = "end") %>%
+    gather(asset, returns, -date) %>%
+    group_by(asset) %>%
+    tq_transmute(mutate_fun = periodReturn,
+                 type = "log") %>%
+    spread(asset, monthly.returns) %>%
+    select(date, symbols) %>%
+    slice(-1) -> asset_returns_tbltime
+```
+
+## Tidying Up
+
+In order for our dataframes to be in tidy format we need columns date, asset, and returns.
+
+```{r}
+asset_returns_dplyr %>%
+    gather(asset, returns, -date) %>%
+    group_by(asset) -> asset_returns_long
+```
+
+# Visualizing Asset Returns in the xts World 
+
+highcharter is an R package, but HighCharts is a javascript library. 
+
+```{r}
+add_series <- function(data, sym) {
+    hc_add_series(data, asset_returns_xts[, sym],
+                  name = sym)
+}
+
+highchart(type = "stock") %>%
+    hc_title(text = "Monthly Log Returns") %>%
+    add_series(symbols[1]) %>%
+    add_series(symbols[2]) %>%
+    add_series(symbols[3]) %>%
+    add_series(symbols[4]) %>%
+    add_series(symbols[5]) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_navigator(enabled = FALSE) %>%
+    hc_scrollbar(enabled = FALSE) %>%
+    hc_exporting(enabled = TRUE) %>%
+    hc_legend(enabled = TRUE)
+```
+
+We could also make a histogram 
+
+```{r}
+hc_hist <- hist(asset_returns_xts[, symbols[1]],
+                breaks = 50,
+                plot = FALSE)
+
+hc_hist %>%
+    hchart(color = "cornflowerblue") %>%
+    hc_title(text = paste(symbols[1],
+                          "Log Returns Distribution",
+                          sep = " ")) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_exporting(enabled = TRUE) %>%
+    hc_legend(enabled = FALSE)
+```
+
+Now we can create a function for generating these histograms 
+
+```{r}
+hc_hist <- function(data, n, color = "mediumpurple") {
+    hc_hist_obj <- hist(data[, symbols[n]],
+                        breaks = 50,
+                        plot = FALSE)
+
+    hchart(hc_hist_obj, color = color) %>%
+        hc_title(text = paste(symbols[n],
+                              "log Returns Distribution",
+                              sep = " ")) %>%
+        hc_add_theme(hc_theme_flat()) %>%
+        hc_exporting(enabled = TRUE) %>%
+        hc_legend(enabled = FALSE)
+}
+
+map2(1:5, c("cornflowerblue", "green", "pink", "yellow", "mediumpurple"),
+     ~ hc_hist(asset_returns_xts, .x, .y))
+```
+
+# Visualizing Asset Returns in the Tidyverse
+
+```{r}
+asset_returns_long %>%
+    ggplot(aes(x = returns, fill = asset)) +
+    geom_histogram(alpha = 0.45, binwidth = .005) +
+    ggtitle("Monthly Returns Since 2013")
+
+asset_returns_long %>%
+    ggplot(aes(x = returns, fill = asset)) +
+    geom_histogram(alpha = 0.45, binwidth = .01) +
+    facet_wrap(~asset) +
+    ggtitle("Monthly Returns Since 2013") +
+    theme_update(plot.title = element_text(hjust = 0.5))
+
+asset_returns_long %>%
+    ggplot(aes(x = returns, fill = asset)) +
+    geom_density(alpha = 0.5) +
+    ggtitle("Monthly Returns Density Since 2013") +
+    xlab("monthly returns") +
+    ylab("distribution")
+
+asset_returns_long %>%
+    ggplot(aes(x = returns, fill = asset)) +
+    geom_density(alpha = 0.5) +
+    geom_histogram(alpha = 0.3, binwidth = 0.01) +
+    guides(fill = FALSE) +
+    facet_wrap(~asset) +
+    ggtitle("Monthly Returns Since 2013") +
+    xlab("monthly returns") +
+    ylab("distribution") +
+    theme_update(plot.title = element_text(hjust = 0.5))
+```
