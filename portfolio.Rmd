@@ -1,0 +1,155 @@
+# Building a Portfolio
+
+```{r}
+library(tidyverse)
+library(xts)
+library(quantmod)
+library(lubridate)
+library(readxl)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+library(tibbletime)
+library(quantmod)
+library(PerformanceAnalytics)
+```
+
+Now we collect individual returns into a portfolio, which is a weighted set of asset returns. Accordingly, the first thing we need to do is to assign a weight to each asset. 
+
+```{r}
+# set weights
+weights <- c(0.25, 0.25, 0.2, 0.2, 0.1)
+
+# combine in df
+tibble(weights, symbols)
+
+# sanity check
+tibble(weights, symbols) %>%
+    summarise(total_weight = sum(weights))
+```
+
+Now we can use those weights to convert the weights of 5 assets into the returns of 1 portfolio. The return of a multi asset portfolio is the sum of the weighted returns of each asset. 
+
+# Portfolio Returns in the xts World 
+
+```{r}
+Return.portfolio(asset_returns_xts,
+                 weights = weights,
+                 rebalance_on = "months") %>%
+    `colnames<-`("returns") -> portfolio_returns_xts_rebalanced_monthly
+```
+
+# Portfolio Returns in the Tidyverse
+
+```{r}
+weight_table <- tibble(weights, symbols)
+
+asset_returns_long %>%
+    group_by(asset) %>%
+    left_join(weight_table, by = c("asset" = "symbols")) %>%
+    mutate(weighted_returns = returns * weights) %>%
+    group_by(date) %>%
+    summarise(returns = sum(weighted_returns)) -> portfolio_returns_dplyr
+```
+
+# Portfolio Returns in the tidyquant World 
+
+```{r}
+asset_returns_long %>%
+    tq_portfolio(assets_col = asset,
+                 returns_col = returns,
+                 weights = weights,
+                 col_rename = "returns",
+                 rebalance_on = "months") -> portfolio_tq
+```
+
+# Visualizing Portfolio Returns in the xts World 
+
+```{r}
+highchart(type = "stock") %>%
+    hc_title(text = "Portfolio Monthly Returns") %>%
+    hc_add_series(portfolio_returns_xts_rebalanced_monthly$returns,
+                  name = "Rebalanced Monthly",
+                  color = "mediumpurple") %>%
+    hc_add_theme(hc_theme_economist()) %>%
+    hc_navigator(enabled = FALSE) %>%
+    hc_scrollbar(enabled = FALSE) %>%
+    hc_legend(enabled = FALSE) %>%
+    hc_exporting(enabled = TRUE)
+```
+
+```{r}
+hchart(hist(portfolio_returns_xts_rebalanced_monthly$returns,
+            breaks = 50,
+            plot = FALSE),
+       color = "forestgreen",
+       name = "Portfolio") %>%
+    hc_title(text = "Portfolio Returns Distribution") %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_exporting(enabled = TRUE)
+```
+
+# Visualizing Portfolio Returns in the Tidyverse
+
+## Scatterplot
+
+```{r}
+portfolio_tq %>%
+    ggplot(aes(x = date, y = returns)) +
+    geom_point(color = "mediumpurple") +
+    xlab("date") + ylab("monthly return") +
+    theme_update(plot.title = element_text(hjust = 0.5)) +
+    ggtitle("Portfolio Returns Scatter")
+```
+
+## Histogram
+
+```{r}
+portfolio_tq %>%
+    ggplot(aes(x = returns)) +
+    geom_histogram(binwidth = .005,
+                   fill = "mediumpurple",
+                   color = "black") +
+    ggtitle("Portfolio Returns Distribution") +
+    geom_vline(xintercept = 0, lty = 2) +
+    theme_update(plot.title = element_text(hjust = 0.5))
+```
+
+We can also compare the portfolio distribution to those of our individual assets by layering on geoms. 
+
+```{r}
+asset_returns_long %>%
+    ggplot(aes(x = returns, fill = asset)) +
+    geom_histogram(alpha = 0.15, binwidth = .01) +
+    geom_histogram(data = portfolio_tq,
+                   fill = "mediumpurple",
+                   color = "black",
+                   binwidth = .01,
+                   alpha = 0.4) +
+    ggtitle("Portfolio and Asset Monthly Returns") +
+    theme_update(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+portfolio_tq %>%
+    ggplot(aes(x = returns)) +
+    geom_histogram(binwidth = .01,
+                   fill = "mediumpurple",
+                   color = "black") +
+    geom_density(alpha = 0.5, color = "blue", lty = 2) +
+    xlab("monthly returns") +
+    ylab("distribution") +
+    theme_update(plot.title = element_text(hjust = 0.5)) +
+    ggtitle("Portfolio Histogram and Density")
+```
+
+# Shiny App Portfolio Returns 
+
+We want to empower an end user to do the following:
+
+1. Build a portfolio by choosing assets and weights 
+2. choose a start date
+3. choose a rebalancing frequency
+4. calculate portfolio returns 
+5. visualize the portfolio returns on histogram and density charts 
+

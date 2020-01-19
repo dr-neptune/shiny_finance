@@ -1,0 +1,102 @@
+---
+title: "Portfolio Returns"
+runtime: shiny
+output:
+    flexdashboard::flexdashboard:
+        orientation: rows
+---
+
+```{r}
+library(tidyverse)
+library(shiny)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+
+symbols <- c("SPY", "EFA", "IJS", "EEM", "AGG")
+```
+
+```{r}
+stockSymUI <- function(id, label) {
+    ns <- NS(id)
+
+    tagList(
+        fluidRow(
+            column(6,
+                   textInput(ns("stock"), "Stock", label)),
+            column(5,
+                   numericInput(ns("weight"), "Portfolio %",
+                                value = 25,
+                                min = 1, max = 100)),
+            fluidRow(column(7,
+                          dateInput(ns("date"),
+                                    "Starting Date",
+                                    "2013-01-01",
+                                    format = "yyyy-mm-dd")))))}
+
+stockIn <- symbols %>% map(., ~ stockSymUI(.x, .x))
+
+## dateIn <- fluidRow(column(7,
+##                           dateInput("date",
+##                                     "Starting Date",
+##                                     "2013-01-01",
+##                                     format = "yyyy-mm-dd")))
+
+rebalanceIn <- fluidRow(column(6,
+                               selectInput("rebalance",
+                                           "rebal freq",
+                                           c("Yearly" = "years",
+                                             "Monthly" = "months",
+                                             "Weekly" = "weeks"))))
+
+ui <- fluidPage(!!!stockIn,
+                dateIn,
+                rebalanceIn,
+                actionButton("go", "Submit"))
+```
+
+```{r}
+stockSym <- function(input, output, session) {
+    symbol <- input$stock
+
+    prices <- getSymbols(symbol,
+                         src = "yahoo",
+                         from = input$date,
+                         auto.assign = TRUE,
+                         warnings = FALSE) %>%
+        map(., ~ Ad(get(.x))) %>%
+        reduce(merge) %>%
+        `colnames<-`(symbols)
+
+    asset_returns <-
+        reactive({
+            prices %>%
+                to.monthly(indexAt = "last",
+                           OHLC = FALSE) %>%
+                tk_tbl(preserve_index = TRUE,
+                       rename_index = "date") %>%
+                gather(asset, returns, -date) %>%
+                group_by(asset) %>%
+                mutate(returns = (log(returns) - log(lag(returns))))})
+
+    asset_returns
+}
+
+server <- function(input, output, session) {
+    stockReturns <- eventReactive(input$go, {
+        # see if splatting works here
+        callModule(stockSym, "SPY")
+        callModule(stockSym, "EFA")
+        callModule(stockSym, "IJS")
+        callModule(stockSym, "EEM")
+        callModule(stockSym, "AGG")
+})
+}
+```
+
+
+## Original 
+
+```{r}
+flexdashboard::flex_dashboard()
+```
