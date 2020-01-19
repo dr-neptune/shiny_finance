@@ -2,6 +2,7 @@
 
 ```{r}
 library(tidyverse)
+library(shiny)
 library(xts)
 library(quantmod)
 library(lubridate)
@@ -153,3 +154,151 @@ We want to empower an end user to do the following:
 4. calculate portfolio returns 
 5. visualize the portfolio returns on histogram and density charts 
 
+```{r}
+symbols <- c("SPY", "EFA", "IJS", "EEM", "AGG")
+
+make_input <- function(symbol, index) {
+    fluidRow(
+        column(6,
+               textInput(paste0("stock_", symbol),
+                         paste("Stock", index),
+                         symbol)),
+        column(5,
+               numericInput(paste0("wt_", index),
+                            "Portfolio %",
+                            value = 20,
+                            min = 0,
+                            max = 100)))
+}
+
+stock_inputs <- imap(symbols, ~ make_input(.x, .y))
+
+date_input <- fluidRow(
+    column(7,
+           dateInput("date",
+                     "Starting Date",
+                     "2013-01-01",
+                     format = "yyyy-mm-dd")))
+
+rebalance_input <- fluidRow(
+    column(6,
+           selectInput("rebalance",
+                       "Rebalance Frequency",
+                       c("Yearly" = "years",
+                         "Monthly" = "months",
+                         "Weekly" = "weeks"))))
+
+
+ui <- fluidPage(
+    theme = shinythemes::shinytheme("paper"),
+    sidebarLayout(
+        sidebarPanel(!!!stock_inputs,
+                     date_input,
+                     rebalance_input,
+                     actionButton("go", "Submit")),
+        mainPanel(
+            tabsetPanel(
+                tabPanel("Histogram",
+                         plotOutput("plot_1")),
+                tabPanel("Density",
+                         plotOutput("plot_2")),
+                tabPanel("Both",
+                         plotOutput("plot_3"))))))
+```
+
+```{r}
+get_returns <- function(symbols, weights, from_date) {
+    # pull in info from yahoo
+    prices <- getSymbols(symbols,
+               src = "yahoo",
+               from = from_date,
+               auto.assign = TRUE,
+               warnings = FALSE) %>%
+        map(., ~ Ad(get(.x))) %>%
+        reduce(merge) %>%
+        `colnames<-`(syms) 
+        # convert to monthly gains
+    asset_returns <- prices %>% to.monthly(indexAt = "last",
+                                           OHLC = FALSE) %>%
+        tk_tbl(preserve_index = TRUE,
+               rename_index = "date") %>%
+        gather(asset, returns, -date) %>%
+        group_by(asset) %>%
+        mutate(returns = (log(returns) - log(lag(returns))))
+    
+     # check portfolio returns
+    (portfolio_returns <- tq_portfolio(assets_col = asset,
+                                      returns_col = returns,
+                                      weights = weights,
+                                      col_rename = "returns"))
+}
+
+server <- function(input, output, session) {
+   portfolio_returns <- eventReactive(input$go, {
+       syms <- c(input$stock_SPY, input$stock_EFA,
+                 input$stock_IJS, input$stock_EEM,
+                 input$stock_AGG)
+
+       weights <- c(input$wt_1 / 100, input$wt_2 / 100,
+                    input$wt_3 / 100, input$wt_4 / 100,
+                    input$wt_5 / 100)
+
+       ## get_returns(symbols = syms,
+       ##             weights = weights,
+       ##             from_date = input$date)
+       ## })
+       prices <- getSymbols(syms,
+                            src = "yahoo",
+                            from = input$date,
+                            auto.assign = TRUE,
+                            warnings = FALSE) %>%
+           map(., ~ Ad(get(.x))) %>%
+           reduce(merge) %>%
+           `colnames<-`(syms)
+
+       asset_returns <- prices %>%
+           to.monthly(indexAt = "last",
+                      OHLC = FALSE) %>%
+           tk_tbl(preserve_index = TRUE,
+                  rename_index = "date") %>%
+           gather(asset, returns, -date) %>%
+           group_by(asset) %>%
+           mutate(returns = (log(returns) - log(lag(returns))))
+
+       portfolio_returns <- asset_returns %>%
+           tq_portfolio(assets_col = asset,
+                        returns_col = returns,
+                        weights = weights,
+                        col_rename = "returns")
+
+       portfolio_returns
+   })
+
+   output$plot_1 <- renderPlot({
+                             portfolio_returns() %>%
+                                 ggplot(aes(x = returns)) +
+                                 geom_histogram(alpha = 0.25,
+                                                binwidth = .01,
+                                                fill = "blue")})
+
+   output$plot_2 <- renderPlot({
+                             portfolio_returns() %>%
+                                 ggplot(aes(x = returns)) +
+                                 geom_density(size = 1,
+                                              color = "blue",
+                                              lty = 2)})
+
+   output$plot_3 <- renderPlot({
+       portfolio_returns() %>%
+           ggplot(aes(x = returns)) +
+           geom_histogram(alpha = 0.25,
+                          binwidth = .01,
+                          fill = "blue") +
+           geom_density(size = 1,
+                        alpha = 0.5,
+                        color = "forestgreen",
+                        lty = 3)})
+}
+
+shinyApp(ui, server)
+```
