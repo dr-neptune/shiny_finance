@@ -1,0 +1,244 @@
+# Risk 
+
+```{r}
+library(magrittr)
+library(tidyverse)
+library(shiny)
+library(xts)
+library(quantmod)
+library(lubridate)
+library(readxl)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+library(tibbletime)
+library(quantmod)
+library(PerformanceAnalytics)
+```
+
+This section on risk will focus on calculating the standard deviation, skewness, and kurtosis of portfolio returns. 
+
+We will mainly focus on standard deviation  as it measures the extent to which a portfolios returns are dispersed around their mean. If returns are more dispersed, the portfolio has a higher standard deviation and is seen as riskier or more volatile. 
+
+From a toolkit perspective, we will accomplish the following in this section:
+
+1. calculate and visualize x and rolling x where x is one of the following:
+   - standard deviation 
+   - skewness
+   - kurtosis 
+2. Build shiny apps for them 
+
+# Standard Deviation
+
+Here is the textbook equation for the standard deviation of a multi asset portfolio 
+
+Standard Deviation = $\sqrt{\sum_{t = 1}^n (x_i - \bar{x})^2 / n}$
+
+where x is each monthly portfolio rerturn, x bar is the mean monthly portfolio return and n is the number of observations. 
+
+```{r}
+# build a covariance matrix of returns
+(cov_mat <- cov(asset_returns_xts) %>% round(5))
+
+# take sqrt of the transpose of the weights vector times the cov matrix times the weights vector
+sqrt(t(weights) %*% cov_mat %*% weights) * 100  %>%
+    round(2) -> sd_matrix_algebra
+```
+
+We will also be looking at rolling standard deviation. We can look at the average volatility for the entire life of the portfolio, but we also want to understand how that volatility has changed over time and behaved in different market conditions. 
+
+## Standard Deviation in the xts World 
+
+```{r}
+asset_returns_xts %>% StdDev(weights = weights) * 100 %>% round(2)
+```
+
+## Rolling Standard Deviations in the xts World
+
+```{r}
+port_rolling_sd_xts <- rollapply(portfolio_returns_xts_rebalanced_monthly,
+                                 FUN = sd,
+                                 # assign length of rolling window
+                                 width = 24) %>%
+    na.omit()
+```
+
+## Standard Deviation in the Tidyverse 
+
+```{r}
+portfolio_returns_dplyr %>%
+    summarise(
+        sd = sd(returns) %>% round(4)) -> portfolio_sd_tidy
+```
+
+## Rolling Standard Deviations in the Tidyverse
+
+```{r}
+port_rolling_sd_tidy <- portfolio_returns_dplyr %>%
+    mutate(rolling_sd = rollapply(returns,
+                                  FUN = sd,
+                                  width = 24,
+                                  fill = NA)) %>%
+    select(date, rolling_sd) %>%
+    na.omit()
+```
+
+<!-- ## Rolling Standard Deviation with Tibbletime and the Tidyverse -->
+
+<!-- tibbletime and its rollify function are built for time series analysis. -->
+
+<!-- ```{r} -->
+<!-- sd_roll_24 <- rollify(sd, window = 24) -->
+
+<!-- portfolio_tq %>% -->
+<!--     as_tbl_time(index = date) %>% -->
+<!--     mutate(sd = sd_roll_24(returns)) -->
+<!-- ``` -->
+
+## Standard Deviation in the tidyquant World 
+
+```{r}
+portfolio_tq %>%
+    tq_performance(Ra = returns,
+                   Rb = NULL,
+                   performance_fun = table.Stats) %>%
+    select(Stdev) %>%
+    mutate(tq_sd = round(Stdev, 4) * 100)
+```
+
+## Rolling Standard Deviaton in the tidyquant World 
+
+```{r}
+port_rolling_sd_tq <- portfolio_tq %>%
+    tq_mutate(mutate_fun = rollapply,
+              width = 24,
+              FUN = sd,
+              col_rename = "rolling_sd") %>%
+    select(date, rolling_sd) %>%
+    na.omit()
+
+port_rolling_sd_tq %>% tail(3)
+```
+
+# Visualizing Standard Deviation 
+
+Visualizing standard deviation of portfolio returns comes down to visualizing the dispersion of portfolio returns. 
+
+```{r}
+portfolio_returns_dplyr %>%
+    ggplot(aes(x = date, y = returns)) +
+    geom_point(color = "mediumpurple") +
+    scale_x_date() +
+    ggtitle("Scatterplot of Returns by Date")
+```
+
+It is hard to tell which years were good and bad. Lets add a different color for any monthly returns that are one standard deviation away from the mean. 
+
+```{r}
+# get statistics
+sd_plot <- sd(portfolio_tq$returns)
+mean_plot <- mean(portfolio_tq$returns)
+sd_up <- mean_plot + sd_plot
+sd_down <- mean_plot - sd_plot
+
+portfolio_tq %>%
+    mutate(hist_red = if_else(returns < sd_down,
+                              returns,
+                              as.numeric(NA)),
+           hist_green = if_else(returns > sd_down,
+                                returns,
+                                as.numeric(NA)),
+           hist_blue = if_else(returns > sd_down &
+                               returns < sd_up,
+                               returns,
+                               as.numeric(NA))) %>%
+    ggplot(aes(x = date)) +
+    geom_point(aes(y = hist_red), color = "red") +
+    geom_point(aes(y = hist_green), color = "forestgreen") +
+    geom_point(aes(y = hist_blue), color = "blue") +
+    geom_hline(yintercept = sd_up,
+               color = "mediumpurple",
+               lty = 4) +
+    geom_hline(yintercept = sd_down,
+               color = "mediumpurple",
+               lty = 4) + 
+    labs(title = "Colored Scatter", y = "monthly returns") +
+    scale_x_date()
+```
+
+To visualize the actual standard deviation of our portfolio, it helps to do so in a comparative manner. We can explore how our portfolio risk compares to the risk of the 5 individual assets. 
+
+```{r}
+asset_returns_long %>%
+    group_by(asset) %>%
+    summarise(sd = 100 * sd(returns)) %>%
+    add_row(asset = "Portfolio",
+            sd = portfolio_sd_tidy[[1]] * 100) %>%
+    ggplot(aes(x = asset,
+               y = sd,
+               color = asset)) +
+    geom_point() +
+    scale_y_continuous(labels = function(x) paste0(x, "%")) +
+    geom_text(aes(x = "Portfolio",
+                  y = portfolio_sd_tidy[[1]] * 100 + 0.2),
+              label = "Portfolio",
+              color = "mediumpurple") +
+    labs(y = "Standard Deviation")
+```
+
+We can also visualize expected monthly returns scattered against the standard deviation of monthly returns. 
+
+```{r}
+asset_returns_long %>%
+    group_by(asset) %>%
+    summarise(expected_return = mean(returns),
+              std_dev = sd(returns)) %>%
+    add_row(asset = "Portfolio",
+            std_dev = sd(portfolio_tq$returns),
+            expected_return = mean(portfolio_tq$returns)) %>%
+    ggplot(aes(x = std_dev,
+               y = expected_return,
+               color = asset)) +
+    geom_point(size = 2) +
+    geom_text(aes(x = sd(portfolio_tq$returns) * 1.1,
+                  y = mean(portfolio_tq$returns),
+                  label = "Portfolio")) +
+    ylab("Expected Return") +
+    xlab("Standard Deviation") +
+    ggtitle("Expected Monthly Return vs. Risk") +
+    scale_y_continuous(labels = function(x) paste0(x, "%"))
+```
+
+# Visualizing Rolling Standard Deviation in the xts World 
+
+```{r}
+port_rolling_sd_xts %<>%
+    round(4) * 100
+```
+
+```{r}
+highchart(type = "stock") %>%
+    hc_title(text = "24 Month Rolling Volatility") %>%
+    hc_add_series(port_rolling_sd_xts,
+                  color = "mediumpurple") %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_yAxis(labels = list(format = "{value}%"),
+             opposite = FALSE) %>%
+    hc_navigator(enabled = FALSE) %>%
+    hc_scrollbar(enabled = FALSE) %>%
+    hc_exporting(enabled = TRUE) %>%
+    hc_legend(enabled = TRUE)
+```
+
+## Visualizing Rolling Standard Deviation in the Tidyverse 
+
+```{r}
+port_rolling_sd_tq %>%
+    ggplot(aes(x = date)) +
+    geom_line(aes(y = rolling_sd),
+              color = "mediumpurple") +
+    scale_y_continuous(labels = scales::percent) +
+    scale_x_date() +
+    labs(title = "Rolling Standard Deviation", y = "")
+```
+
