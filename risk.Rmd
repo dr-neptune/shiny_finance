@@ -350,3 +350,212 @@ server <- function(input, output, session) {
 
 shinyApp(ui, server)
 ```
+
+# Skewness
+
+Skewness is the degree to which returns are asymmetric around their mean. Skewness can be taken as a measure of how returns are not distributed normally.
+
+Skew = $\frac{\sum_{t = 1}^n (x_i - \bar{x})^3}{(\sum_{t = 1}^n (x_i - \bar{x})^2 / n)^{3/2}}$
+
+## Skewness in the xts World
+
+```{r}
+(skew_xts <- skewness(portfolio_returns_xts_rebalanced_monthly$returns))
+```
+
+## Skewness in the Tidyverse
+
+```{r}
+(skew_tidy <- portfolio_tq %>%
+    summarize(skew_builtin = skewness(returns)))
+```
+
+## Visualizing Skewness
+
+```{r}
+portfolio_tq %>%
+    ggplot(aes(x = returns)) +
+    geom_histogram(alpha = 0.7,
+                   binwidth = .003,
+                   fill = "mediumpurple",
+                   color = "black") +
+    geom_vline(xintercept = 0, lty = 2)
+```
+
+
+ We can add color for the returns which are more than 2 standard deviations below the mean
+ 
+```{r}
+portfolio_tq %>%
+    mutate(hist_red = if_else(returns < (mean(returns) - 2 * sd(returns)),
+                              returns,
+                              as.numeric(NA)),
+           reg_returns = if_else(returns > (mean(returns) - 2 * sd(returns)),
+                                 returns,
+                                 as.numeric(NA))) %>%
+    ggplot() +
+    geom_histogram(aes(x = hist_red),
+                   alpha = 0.7,
+                   binwidth = 0.003,
+                   fill = "red",
+                   color = "black") +
+    geom_histogram(aes(x = reg_returns),
+                   alpha = 0.7,
+                   binwidth = 0.003,
+                   fill = "mediumpurple",
+                   color = "black") +
+    geom_vline(xintercept = 0, lty = 2) +
+    xlab("Monthly Returns")
+```
+
+### Density 
+
+```{r}
+density_mm_plot <- function(data, x_val, mean = TRUE, median = TRUE,
+                     shade_fill = "gold",
+                     shade_fill_med = "red") {
+    # baseline
+    data %>%
+        ggplot(aes(x = .data[[x_val]])) +
+        stat_density(geom = "line",
+                     alpha = 1,
+                     color = "black") -> p_dens_plot
+
+    if (mean) {
+        # get area less than mean
+        mean <- mean(data[[x_val]])
+        shaded_area_data <- ggplot_build(p_dens_plot)$data[[1]] %>%
+                                                    filter(x < mean)
+
+        p_dens_plot +
+            geom_area(data = shaded_area_data,
+                      aes(x = x, y = y),
+                      fill = shade_fill,
+                      alpha = 0.3) -> p_dens_plot
+
+        p_dens_plot +
+            geom_segment(data = shaded_area_data,
+                         aes(x = mean,
+                             y = 0,
+                             xend = mean,
+                             yend = density),
+                         color = "black",
+                         linetype = "dotted",
+                         alpha = 0.5) +
+            annotate(geom = "text",
+                     x = mean,
+                     y = 5,
+                     label = "mean",
+                     color = "black",
+                     fontface = "plain",
+                     angle = 90,
+                     alpha = 0.8,
+                     vjust = -1.75) -> p_dens_plot
+        }
+    
+    if (median) {
+        median <- median(data[[x_val]])
+        median_line_data <- ggplot_build(p_dens_plot)$data[[1]] %>%
+                                                    filter(x <= median)
+
+        p_dens_plot +
+            geom_area(data = median_line_data,
+                      aes(x = x, y = y),
+                      fill = shade_fill_med,
+                      alpha = 0.3) -> p_dens_plot
+        
+        p_dens_plot +
+            geom_segment(data = median_line_data,
+                         aes(x = median,
+                             y = 0,
+                             xend = median,
+                             yend = density),
+                         color = "black",
+                         linetype = "dotted",
+                         alpha = 0.5) +
+            annotate(geom = "text",
+                     x = median,
+                     y = 5,
+                     label = "median",
+                     color = "black",
+                     fontface = "plain",
+                     angle = 90,
+                     alpha = 0.8,
+                     vjust = 1.75) -> p_dens_plot
+    }
+
+    p_dens_plot +
+        geom_vline(xintercept = 0, lty = 2, alpha = 0.3) + 
+        xlab(x_val)
+}
+
+density_mm_plot(portfolio_tq, "returns")
+```
+
+Now we can investigate our portfolio's skewness compared to the 5 assets' skewness. 
+
+```{r}
+asset_returns_long %>%
+    summarize(skew_assets = skewness(returns)) %>%
+    add_row(asset = "Portfolio",
+            skew_assets = skew_tidy$skew_builtin) %>%
+    ggplot(aes(x = asset,
+               y = skew_assets,
+               color = asset)) +
+    geom_point() +
+    annotate(geom = "text",
+             x = "Portfolio",
+             y = skew_tidy$skew_builtin + 0.04,
+             label = "Portfolio",
+             color = "cornflowerblue") +
+    labs(y = "skewness")
+```
+
+# Rolling Skewness in the xts World
+
+```{r}
+window <- 24
+rollapply(portfolio_returns_xts_rebalanced_monthly,
+          FUN = skewness,
+          width = window) %>%
+    na.omit() -> rolling_skew_xts
+```
+
+# Rolling Skewness in the Tidyverse with tibbletime
+
+```{r}
+# create a rolling function
+skew_roll_24 <- rollify(skewness, window = window)
+
+portfolio_tq %>%
+    as_tbl_time(index = date) %>%
+    mutate(skew = skew_roll_24(returns)) %>%
+    select(-returns) %>%
+    na.omit() -> rolling_skew_tbltime
+```
+
+# Rolling Skewness in the tidyquant World
+
+```{r}
+portfolio_tq %>%
+    tq_mutate(select = returns,
+              mutate_fun = rollapply,
+              width = window,
+              FUN = skewness,
+              col_rename = "tq") %>%
+    select(-returns) %>% 
+    na.omit() -> rolling_skew_tq
+```
+
+Confirm that our results are consistent
+
+```{r}
+rolling_skew_tq %>%
+    mutate(xts = coredata(rolling_skew_xts),
+           tbltime = rolling_skew_tbltime$skew) %>%
+    mutate_if(is.numeric, ~ round(.x, 3)) %>%
+    tail(3)
+```
+
+# Visualizing Rolling Skewness
+
