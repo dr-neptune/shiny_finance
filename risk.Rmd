@@ -249,7 +249,7 @@ Now we can wrap all that work intp an app that allows the user to choose a 5 ass
 ```{r}
 symbols
 
-sym_in <- symbols %>% map2(., 1:5, ~ make_input(.x, .y))
+#sym_in <- symbols %>% map2(., 1:5, ~ make_input(.x, .y))
 
 date_input
 
@@ -411,7 +411,10 @@ portfolio_tq %>%
 ### Density 
 
 ```{r}
-density_mm_plot <- function(data, x_val, mean = TRUE, median = TRUE,
+density_mm_plot <- function(data, x_val,
+                     mean = TRUE,
+                     median = TRUE,
+                     sd = TRUE,
                      shade_fill = "gold",
                      shade_fill_med = "red") {
     # baseline
@@ -422,8 +425,9 @@ density_mm_plot <- function(data, x_val, mean = TRUE, median = TRUE,
                      color = "black") -> p_dens_plot
 
     if (mean) {
-        # get area less than mean
         mean <- mean(data[[x_val]])
+        
+        # get area less than mean
         shaded_area_data <- ggplot_build(p_dens_plot)$data[[1]] %>%
                                                     filter(x < mean)
 
@@ -463,7 +467,7 @@ density_mm_plot <- function(data, x_val, mean = TRUE, median = TRUE,
                       aes(x = x, y = y),
                       fill = shade_fill_med,
                       alpha = 0.3) -> p_dens_plot
-        
+
         p_dens_plot +
             geom_segment(data = median_line_data,
                          aes(x = median,
@@ -484,12 +488,42 @@ density_mm_plot <- function(data, x_val, mean = TRUE, median = TRUE,
                      vjust = 1.75) -> p_dens_plot
     }
 
+    if (sd) {
+        mean <- mean(data[[x_val]])
+
+        sd_out <- c(mean - (2 * sd(data[[x_val]])),
+                    mean + (2 * sd(data[[x_val]])))
+
+        sd_shaded <- ggplot_build(p_dens_plot)$data[[1]] %>%
+                                             split(!between(.$x, sd_out[[1]],
+                                                            sd_out[[2]])) %>%
+                                             .[[2]] %>%
+                                             split(.$x < sd_out[[1]])
+
+        p_dens_plot +
+            geom_area(data = sd_shaded[[2]] %>%
+                     filter(between(x, sd_out[[1]], sd_out[[2]])),
+                      aes(x = x, y = y),
+                      fill = "blue",
+                      alpha = 0.5) -> p_dens_plot
+    }
+
     p_dens_plot +
-        geom_vline(xintercept = 0, lty = 2, alpha = 0.3) + 
+        geom_vline(xintercept = 0, lty = 2, alpha = 0.3) +
         xlab(x_val)
 }
 
+# FIX THIS ^^^ 
+
+## mt_split <- mtcars %>% split(between(.$mpg, 15, 20))
+
+## mt_split %>%
+##     .[[1]] %>%
+##     split(.$mpg > 20) %>%
+##     .[[1]]
+
 density_mm_plot(portfolio_tq, "returns")
+
 ```
 
 Now we can investigate our portfolio's skewness compared to the 5 assets' skewness. 
@@ -559,3 +593,57 @@ rolling_skew_tq %>%
 
 # Visualizing Rolling Skewness
 
+```{r}
+highchart(type = "stock") %>%
+    hc_title(text = "Rolling 24 Month Skewness") %>%
+    hc_add_series(rolling_skew_xts,
+                  name = "Rolling Skewness",
+                  color = "mediumpurple") %>%
+    hc_yAxis(title = list(text = "skewness"),
+             opposite = FALSE,
+             max = 1,
+             min = -1) %>%
+    hc_navigator(enabled = FALSE) %>%
+    hc_scrollbar(enabled = FALSE) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_exporting(enabled = TRUE)
+```
+
+```{r}
+rolling_skew_tq %>%
+    ggplot(aes(x = date, y = tq)) +
+    geom_line(color = "mediumpurple") +
+    ggtitle("Rolling 24 Month Skew") +
+    ylab(paste("Rolling", window, "Month Skewness")) +
+    scale_y_continuous(limits = c(-1, 1))
+```
+
+# Kurtosis
+
+Kurtosis is a measure of the degree to which portfolio returns appear in the tails of their distribution. A normal distribution has a kurtosis of 3. A distribution with a kurtosis greater than 3 has more returns in its tails than the normal, and one with a kurtosis less than 3 has fewer returns in its tails than the normal.
+
+Kurtosis is often described as negative excess or positive excess compared to a kurtosis of 3. A distribution with negative excess kurtosis equal to -1 has an absolute kurtosis of 2, because we subtract from 3. Negative kurtosis generally means less risk.
+
+Kurtosis = $\frac{\sum_{t = 1}^n (x - \bar{x})^4 / n}{(\sum_{t = 1}^n (x_i - \bar{x})^2 - 3)}$
+
+## Kurtosis in the xts world
+
+```{r}
+kurt_xts <- kurtosis(portfolio_returns_xts_rebalanced_monthly$returns)
+```
+
+## Kurtosis in the Tidyverse
+
+```{r}
+portfolio_tq %>%
+    summarize(kurt = kurtosis(returns)) -> kurt_tidy
+```
+
+# Visualizing Kurtosis
+
+```{r}
+sd_pos <- mean + (2 * sd(portfolio_tq$returns))
+sd_neg <- mean - (2 * sd(portfolio_tq$returns))
+
+sd_pos_shaded <- ggplot_build(port)
+```
