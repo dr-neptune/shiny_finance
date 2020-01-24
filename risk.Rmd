@@ -444,7 +444,7 @@ density_mm_plot <- function(data, x_val,
                              xend = mean,
                              yend = density),
                          color = "black",
-                         linetype = "dotted",
+                         lty = 2,
                          alpha = 0.5) +
             annotate(geom = "text",
                      x = mean,
@@ -475,7 +475,7 @@ density_mm_plot <- function(data, x_val,
                              xend = median,
                              yend = density),
                          color = "black",
-                         linetype = "dotted",
+                         lty = 2,
                          alpha = 0.5) +
             annotate(geom = "text",
                      x = median,
@@ -495,14 +495,27 @@ density_mm_plot <- function(data, x_val,
                     mean + (2 * sd(data[[x_val]])))
 
         sd_shaded <- ggplot_build(p_dens_plot)$data[[1]] %>%
-                                             split(!between(.$x, sd_out[[1]],
+                                             split(between(.$x, sd_out[[1]],
                                                             sd_out[[2]])) %>%
-                                             .[[2]] %>%
+                                             .[[1]] %>%
                                              split(.$x < sd_out[[1]])
 
         p_dens_plot +
-            geom_area(data = sd_shaded[[2]] %>%
-                     filter(between(x, sd_out[[1]], sd_out[[2]])),
+            geom_segment(data = sd_shaded[[1]],
+                         aes(x = sd_out[[2]],
+                             y = 0,
+                             xend = sd_out[[2]],
+                             yend = density)) +
+            geom_segment(data = sd_shaded[[2]],
+                         aes(x = sd_out[[1]],
+                             y = 0,
+                             xend = sd_out[[1]],
+                             yend = density)) +
+            geom_area(data = sd_shaded[[2]],
+                      aes(x = x, y = y),
+                      fill = "blue",
+                      alpha = 0.5) +
+            geom_area(data = sd_shaded[[1]],
                       aes(x = x, y = y),
                       fill = "blue",
                       alpha = 0.5) -> p_dens_plot
@@ -513,17 +526,9 @@ density_mm_plot <- function(data, x_val,
         xlab(x_val)
 }
 
-# FIX THIS ^^^ 
-
-## mt_split <- mtcars %>% split(between(.$mpg, 15, 20))
-
-## mt_split %>%
-##     .[[1]] %>%
-##     split(.$mpg > 20) %>%
-##     .[[1]]
-
-density_mm_plot(portfolio_tq, "returns")
-
+density_mm_plot(portfolio_tq, "returns",
+                mean = FALSE,
+                median = FALSE)
 ```
 
 Now we can investigate our portfolio's skewness compared to the 5 assets' skewness. 
@@ -642,8 +647,84 @@ portfolio_tq %>%
 # Visualizing Kurtosis
 
 ```{r}
-sd_pos <- mean + (2 * sd(portfolio_tq$returns))
-sd_neg <- mean - (2 * sd(portfolio_tq$returns))
-
-sd_pos_shaded <- ggplot_build(port)
+density_mm_plot(portfolio_tq, "returns")
 ```
+
+We can also compare portfolio kurtosis to the individual assets kurtosis
+
+```{r}
+asset_returns_long %>%
+    summarize(kurt_assets = kurtosis(returns)) %>%
+    add_row(asset = "Portfolio",
+            kurt_assets = kurt_tidy$kurt) %>%
+    ggplot(aes(x = asset, y = kurt_assets, color = asset)) +
+    geom_point() +
+    annotate(geom = "text",
+             x = "Portfolio",
+             y = kurt_tidy$kurt + .06,
+             label = "Portfolio",
+             color = "cornflowerblue")
+```
+
+# Rolling Kurtosis in the xts World
+
+```{r}
+window <- 24
+
+(rolling_kurt_xts <- rollapply(portfolio_returns_xts_rebalanced_monthly,
+                              FUN = kurtosis,
+                              width = window) %>%
+    na.omit())
+```
+
+# Rolling Kurtosis in the Tidyverse with tibbletime
+
+```{r}
+kurt_roll_24 <- rollify(kurtosis, window = window)
+
+(roll_kurt_tbl_time <- portfolio_tq %>%
+    as_tbl_time(index = date) %>%
+    mutate(kurt = kurt_roll_24(returns)) %>%
+    select(-returns) %>%
+    na.omit())
+```
+
+# Rolling Kurtosis in the tidyquant World
+
+```{r}
+(rolling_kurt_tq <- portfolio_tq %>%
+    tq_mutate(select = returns,
+              mutate_fun = rollapply,
+              width = window,
+              FUN = kurtosis,
+              col_rename = "tq") %>%
+    select(-returns) %>%
+    na.omit())
+```
+
+# Visualizing Rolling Kurtosis
+
+```{r}
+highchart(type = "stock") %>%
+    hc_title(text = "Rolling 24 Month Kurtosis") %>%
+    hc_add_series(rolling_kurt_xts,
+                  name = "Rolling 24 Month Kurtosis",
+                  color = "mediumpurple") %>%
+    hc_yAxis(title = list(text = "kurtosis"),
+             opposite = FALSE) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_navigator(enabled = FALSE) %>%
+    hc_scrollbar(enabled = FALSE) %>%
+    hc_exporting(enabled = TRUE)
+```
+
+```{r}
+rolling_kurt_tq %>%
+    ggplot(aes(x = date, y = tq)) +
+    geom_line(color = "mediumpurple") +
+    ggtitle("Rolling 24 Month Kurtosis") +
+    labs(y = "Rolling Kurtosis")
+```
+
+# Shiny App Skewness and Kurtosis
+
