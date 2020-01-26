@@ -526,9 +526,7 @@ density_mm_plot <- function(data, x_val,
         xlab(x_val)
 }
 
-density_mm_plot(portfolio_tq, "returns",
-                mean = FALSE,
-                median = FALSE)
+density_mm_plot(portfolio_tq, "returns")
 ```
 
 Now we can investigate our portfolio's skewness compared to the 5 assets' skewness. 
@@ -728,3 +726,148 @@ rolling_kurt_tq %>%
 
 # Shiny App Skewness and Kurtosis
 
+```{r}
+
+symbols <- c("SPY", "EFA", "IJS", "EEM", "AGG")
+
+make_input <- function(symbol, index) {
+    fluidRow(
+        column(6,
+               textInput(paste0("stock_", symbol),
+                         paste("Stock", index),
+                         symbol)),
+        column(6,
+               numericInput(paste0("wt_", index),
+                            "Portfolio %",
+                            value = 20,
+                            min = 0,
+                            max = 100)))
+}
+
+stock_inputs <- imap(symbols, ~ make_input(.x, .y))
+
+date_input <- fluidRow(
+    column(6,
+           dateInput("date",
+                     "Starting Date",
+                     "2013-01-01",
+                     format = "yyyy-mm-dd")),
+    column(6,
+           numericInput("window",
+                        "Window",
+                        min = 1,
+                        max = 24,
+                        value = 6)))
+
+buttons <- fluidRow(
+    column(6,
+           actionButton("roll",
+                        "Rolling",
+                        class = "btn btn-primary")),
+    column(6,
+           actionButton("returns",
+                        "Returns",
+                        class = "btn btn-success")))
+
+ui <- fluidPage(
+    theme = shinythemes::shinytheme("paper"),
+    sidebarLayout(
+        sidebarPanel(
+            !!!stock_inputs,
+            date_input,
+            br(),
+            buttons),
+        mainPanel(
+            tabsetPanel(
+                tabPanel("Rolling Skewness",
+                         highchartOutput("plot_skew")),
+                tabPanel("Rolling Kurtosis",
+                         highchartOutput("plot_kurt"))),
+            tabsetPanel(
+                tabPanel("Number Threshold"),
+                tabPanel("Std Dev Threshold"),
+                tabPanel("Density Mean"),
+                tabPanel("Density Tails")))))
+```
+
+```{r}
+get_prices <- function(syms, from_date) {
+    getSymbols(syms,
+               src = "yahoo",
+               from = from_date,
+               auto.assign = TRUE,
+               warnings = FALSE) %>%
+        map(., ~ Ad(get(.x))) %>%
+        reduce(merge) %>%
+        `colnames<-`(syms)    
+}
+
+roll_return <- function(data, fun, window) {
+        rollapply(data,
+                  FUN = fun,
+                  width = window) %>%
+            na.omit()
+}
+
+hchart_plot <- function(data, title) {
+    highchart(type = "stock") %>%
+        hc_title(text = title) %>%
+        hc_add_series(data,
+                      name = title,
+                      color = "mediumpurple") %>%
+        hc_yAxis(title = str_extract(title, "[A-Za-z]*$"),
+                 opposite = FALSE,
+                 max = 3,
+                 min = -3) %>%
+        hc_navigator(enabled = FALSE) %>%
+        hc_scrollbar(enabled = FALSE) %>%
+        hc_exporting(enabled = TRUE)
+}
+
+server <- function(input, output, session) {
+    ## Rolling Skewness and Kurtosis
+    ########################################################
+    # calculate asset returns
+    prices <- eventReactive(input$roll, {
+        # place parameters in vectors
+        syms <- c(input$stock_SPY, input$stock_EFA,
+                  input$stock_IJS, input$stock_EEM,
+                  input$stock_AGG)
+
+        weights <- c(input$wt_1 / 100, input$wt_2 / 100,
+                     input$wt_3 / 100, input$wt_4 / 100,
+                     input$wt_5 / 100)
+        
+        # get prices of the symbols
+        get_prices(syms, input$date)})
+    
+    # calculate portfolio returns
+    xts_returns <- eventReactive(input$roll, {
+        prices() %>%
+            to.monthly(indexAt = "last", OHLC = FALSE) %>%
+            na.omit(Return.calculate(method = "log")) %>%
+            Return.portfolio(weights = weights) %>%
+            `colnames<-`("returns")})
+    
+    # calculate rolling skewness
+    rolling_skew <- eventReactive(input$roll, {
+        xts_returns() %>%
+            roll_return(skewness, input$window)})
+    
+    # calculate rolling kurtosis
+    rolling_kurtosis <- eventReactive(input$roll, {
+        xts_returns() %>%
+            roll_return(kurtosis, input$window)})
+    
+    # render plots
+    output$plot_skew <- renderHighchart({
+        hchart_plot(rolling_skew(),
+                    "Rolling Skew")})
+
+    output$plot_kurt <- renderHighchart({
+        hchart_plot(rolling_kurtosis(),
+                    "Rolling Kurtosis")})
+}
+
+shinyApp(ui, server)
+```

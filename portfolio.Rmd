@@ -178,15 +178,13 @@ date_input <- fluidRow(
            dateInput("date",
                      "Starting Date",
                      "2013-01-01",
-                     format = "yyyy-mm-dd")))
-
-rebalance_input <- fluidRow(
-    column(6,
-           selectInput("rebalance",
-                       "Rebalance Frequency",
-                       c("Yearly" = "years",
-                         "Monthly" = "months",
-                         "Weekly" = "weeks"))))
+                     format = "yyyy-mm-dd")),
+    column(5,
+           numericInput("weight",
+                        "Window",
+                        min = 1,
+                        max = 24,
+                        value = 6)))
 
 
 ui <- fluidPage(
@@ -194,16 +192,24 @@ ui <- fluidPage(
     sidebarLayout(
         sidebarPanel(!!!stock_inputs,
                      date_input,
-                     rebalance_input,
                      actionButton("go", "Submit")),
         mainPanel(
-            tabsetPanel(
-                tabPanel("Histogram",
-                         plotOutput("plot_1")),
-                tabPanel("Density",
-                         plotOutput("plot_2")),
-                tabPanel("Both",
-                         plotOutput("plot_3"))))))
+            fluidRow(
+                tabsetPanel(
+                    tabPanel("Histogram",
+                             plotOutput("plot_1")),
+                    tabPanel("Density",
+                             plotOutput("plot_2")),
+                    tabPanel("Both",
+                             plotOutput("plot_3")))),
+            fluidRow(
+                tabsetPanel(
+                    tabPanel("Histogram",
+                             plotOutput("plot_1")),
+                    tabPanel("Density",
+                             plotOutput("plot_2")),
+                    tabPanel("Both",
+                             plotOutput("plot_3")))))))
 ```
 
 ```{r}
