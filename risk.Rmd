@@ -135,35 +135,41 @@ portfolio_returns_dplyr %>%
 It is hard to tell which years were good and bad. Lets add a different color for any monthly returns that are one standard deviation away from the mean. 
 
 ```{r}
-# get statistics
-sd_plot <- sd(portfolio_tq$returns)
-mean_plot <- mean(portfolio_tq$returns)
-sd_up <- mean_plot + sd_plot
-sd_down <- mean_plot - sd_plot
+double_sd_plot <- function(data, x_var) {
+    # get stats
+    sd_plot <- sd(data[[x_var]])
+    mean_plot <- mean(data[[x_var]])
+    sd_up <- mean_plot + sd_plot
+    sd_down <- mean_plot - sd_plot
 
-portfolio_tq %>%
-    mutate(hist_red = if_else(returns < sd_down,
-                              returns,
-                              as.numeric(NA)),
-           hist_green = if_else(returns > sd_down,
-                                returns,
-                                as.numeric(NA)),
-           hist_blue = if_else(returns > sd_down &
-                               returns < sd_up,
-                               returns,
-                               as.numeric(NA))) %>%
-    ggplot(aes(x = date)) +
-    geom_point(aes(y = hist_red), color = "red") +
-    geom_point(aes(y = hist_green), color = "forestgreen") +
-    geom_point(aes(y = hist_blue), color = "blue") +
-    geom_hline(yintercept = sd_up,
-               color = "mediumpurple",
-               lty = 4) +
-    geom_hline(yintercept = sd_down,
-               color = "mediumpurple",
-               lty = 4) + 
-    labs(title = "Colored Scatter", y = "monthly returns") +
-    scale_x_date()
+    data %>%
+        mutate(hist_red = if_else(returns < sd_down,
+                                  returns,
+                                  as.numeric(NA)),
+               hist_green = if_else(returns > sd_down,
+                                    returns,
+                                    as.numeric(NA)),
+               hist_blue = if_else(returns > sd_down &
+                                   returns < sd_up,
+                                   returns,
+                                   as.numeric(NA))) %>%
+        ggplot(aes(x = returns)) +
+        geom_histogram(aes(x = hist_red),
+                       fill = "red", color = "black", alpha = 0.5) +
+        geom_histogram(aes(x = hist_green),
+                       fill = "forestgreen", color = "black", alpha = 0.5) +
+        geom_histogram(aes(x = hist_blue),
+                       fill = "mediumpurple", color = "black", alpha = 0.5) +
+        geom_vline(xintercept = sd_up,
+                   color = "mediumpurple",
+                   lty = 4) +
+        geom_vline(xintercept = sd_down,
+                   color = "mediumpurple",
+                   lty = 4) + 
+        labs(title = "Returns", y = "monthly returns")
+}
+
+double_sd_plot(portfolio_tq, "returns")
 ```
 
 To visualize the actual standard deviation of our portfolio, it helps to do so in a comparative manner. We can explore how our portfolio risk compares to the risk of the 5 individual assets. 
@@ -249,7 +255,7 @@ Now we can wrap all that work intp an app that allows the user to choose a 5 ass
 ```{r}
 symbols
 
-#sym_in <- symbols %>% map2(., 1:5, ~ make_input(.x, .y))
+sym_in <- symbols %>% map2(., 1:5, ~ make_input(.x, .y))
 
 date_input
 
@@ -268,7 +274,7 @@ ui <- fluidPage(
                      date_input,
                      window_in,
                      actionButton("go", "Submit")),
-        mainPanel(## fluidRow(plotOutput("plot_1")),
+        mainPanel(fluidRow(highchartOutput("plot_1")),
                   fluidRow(plotOutput("plot_2")))))
 ```
 
@@ -348,7 +354,7 @@ server <- function(input, output, session) {
             scale_x_date()})
 }
 
-shinyApp(ui, server)
+# shinyApp(ui, server)
 ```
 
 # Skewness
@@ -419,7 +425,7 @@ density_mm_plot <- function(data, x_val,
                      shade_fill_med = "red") {
     # baseline
     data %>%
-        ggplot(aes(x = .data[[x_val]])) +
+        ggplot(aes(x = data[[x_val]])) +
         stat_density(geom = "line",
                      alpha = 1,
                      color = "black") -> p_dens_plot
@@ -784,10 +790,14 @@ ui <- fluidPage(
                 tabPanel("Rolling Kurtosis",
                          highchartOutput("plot_kurt"))),
             tabsetPanel(
-                tabPanel("Number Threshold"),
-                tabPanel("Std Dev Threshold"),
-                tabPanel("Density Mean"),
-                tabPanel("Density Tails")))))
+                tabPanel("Number Threshold",
+                         plotOutput("plot_sd_hist")),
+                tabPanel("Density Mean",
+                         plotOutput("plot_density_mean")),
+                tabPanel("Density Median",
+                         plotOutput("plot_density_median")),
+                tabPanel("Density Tails",
+                         plotOutput("plot_density_sd"))))))
 ```
 
 ```{r}
@@ -800,6 +810,22 @@ get_prices <- function(syms, from_date) {
         map(., ~ Ad(get(.x))) %>%
         reduce(merge) %>%
         `colnames<-`(syms)    
+}
+
+get_tq_returns <- function(data, weights) {
+    data %>%
+            to.monthly(indexAt = "last",
+                       OHLC = FALSE) %>%
+        tk_tbl(preserve_index = TRUE,
+               rename_index = "date") %>%
+        slice(-1) %>%
+        gather(asset, returns, -date) %>%
+        group_by(asset) %>%
+        mutate(returns = (log(returns) - log(lag(returns)))) %>% 
+        tq_portfolio(assets_col = asset,
+                     returns_col = returns,
+                     weights = weights,
+                     col_rename = "returns")
 }
 
 roll_return <- function(data, fun, window) {
@@ -825,10 +851,8 @@ hchart_plot <- function(data, title) {
 }
 
 server <- function(input, output, session) {
-    ## Rolling Skewness and Kurtosis
-    ########################################################
     # calculate asset returns
-    prices <- eventReactive(input$roll, {
+    prices <- eventReactive(c(input$roll, input$returns), {
         # place parameters in vectors
         syms <- c(input$stock_SPY, input$stock_EFA,
                   input$stock_IJS, input$stock_EEM,
@@ -840,6 +864,9 @@ server <- function(input, output, session) {
         
         # get prices of the symbols
         get_prices(syms, input$date)})
+
+    ## Rolling Skewness and Kurtosis
+    ########################################################
     
     # calculate portfolio returns
     xts_returns <- eventReactive(input$roll, {
@@ -848,7 +875,7 @@ server <- function(input, output, session) {
             na.omit(Return.calculate(method = "log")) %>%
             Return.portfolio(weights = weights) %>%
             `colnames<-`("returns")})
-    
+
     # calculate rolling skewness
     rolling_skew <- eventReactive(input$roll, {
         xts_returns() %>%
@@ -858,6 +885,20 @@ server <- function(input, output, session) {
     rolling_kurtosis <- eventReactive(input$roll, {
         xts_returns() %>%
             roll_return(kurtosis, input$window)})
+
+    ## Portfolio Returns
+    ########################################################
+    tq_returns <- eventReactive(input$returns, {
+        prices() %>%
+            get_tq_returns(weights = weights)
+    })
+    
+    ## asset_returns_long %>%
+    ## tq_portfolio(assets_col = asset,
+    ##              returns_col = returns,
+    ##              weights = weights,
+    ##              col_rename = "returns",
+    ##              rebalance_on = "months") -> portfolio_tq
     
     # render plots
     output$plot_skew <- renderHighchart({
@@ -867,6 +908,21 @@ server <- function(input, output, session) {
     output$plot_kurt <- renderHighchart({
         hchart_plot(rolling_kurtosis(),
                     "Rolling Kurtosis")})
+
+    output$plot_sd_hist <- renderPlot({
+        double_sd_plot(tq_returns(), "returns")})
+
+    output$plot_density_mean <- renderPlot({
+        density_mm_plot(tq_returns, "returns",
+                        median = FALSE, sd = FALSE)})
+
+    output$plot_density_median <- renderPlot({
+        density_mm_plot(tq_returns, "returns",
+                        mean = FALSE, sd = FALSE)})
+
+    output$plot_density_sd <- renderPlot({
+        density_mm_plot(tq_returns, "returns",
+                        mean = FALSE, median = FALSE)})
 }
 
 shinyApp(ui, server)
