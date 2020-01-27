@@ -1,0 +1,32 @@
+# Portfolio Theory
+
+- The Sharpe Ratio is a measure of the return vs the risk ratio of a portfolio. 
+- The Capital Asset Pricing Model (CAPM) will be used to calculate market beta for our assets and portfolio 
+- The Fama-French Multi-Factor model will be used to explore multiple linear regression
+
+For more, we can look at 
+
+- (Asset Prices: A Theory of Market Equilibrium under Conditions of Risk)[https://www.efalken.com/LowVolClassics/sharpe64.pdf]
+- (The Sharpe Ratio)[https://web.stanford.edu/~wfsharpe/art/sr/sr.htm]
+- (Common Risk Factors in the Returns on Stocks and Bonds)[https://rady.ucsd.edu/faculty/directory/valkanov/pub/classes/mfe/docs/fama_french_jfe_1993.pdf]
+
+# Sharpe Ratio
+
+The Sharpe Ratio is defined as the mean of the excess monthly portfolio returns above the risk-free rate, divided by the standard deviation of the excess monthly portfolio returns above the risk-free rate. This is the formulation for 1994 as opposed to 1966. 
+
+The Sharpe Ratio measures excess returns per unit of risk, where we take the standard deviation to represent portfolio risk. 
+
+Sharpe Ratio = $\bar{R_p - R_f} / \sigma_{excess}$
+
+## Sharpe Ratio in xts
+
+```{r}
+# choose a risk free rate
+rfr <- .0003
+
+# get sharpe ratio
+(sharpe_xts <- SharpeRatio(portfolio_returns_xts_rebalanced_monthly,
+                          Rf = rfr,
+                          FUN = "StdDev") %>%
+    `colnames<-`("sharpe_xts"))
+```

@@ -425,7 +425,7 @@ density_mm_plot <- function(data, x_val,
                      shade_fill_med = "red") {
     # baseline
     data %>%
-        ggplot(aes(x = data[[x_val]])) +
+        ggplot(aes(x = .data[[x_val]])) +
         stat_density(geom = "line",
                      alpha = 1,
                      color = "black") -> p_dens_plot
@@ -462,7 +462,7 @@ density_mm_plot <- function(data, x_val,
                      alpha = 0.8,
                      vjust = -1.75) -> p_dens_plot
         }
-    
+
     if (median) {
         median <- median(data[[x_val]])
         median_line_data <- ggplot_build(p_dens_plot)$data[[1]] %>%
@@ -892,14 +892,7 @@ server <- function(input, output, session) {
         prices() %>%
             get_tq_returns(weights = weights)
     })
-    
-    ## asset_returns_long %>%
-    ## tq_portfolio(assets_col = asset,
-    ##              returns_col = returns,
-    ##              weights = weights,
-    ##              col_rename = "returns",
-    ##              rebalance_on = "months") -> portfolio_tq
-    
+
     # render plots
     output$plot_skew <- renderHighchart({
         hchart_plot(rolling_skew(),
@@ -913,15 +906,15 @@ server <- function(input, output, session) {
         double_sd_plot(tq_returns(), "returns")})
 
     output$plot_density_mean <- renderPlot({
-        density_mm_plot(tq_returns, "returns",
+        density_mm_plot(tq_returns(), "returns",
                         median = FALSE, sd = FALSE)})
 
     output$plot_density_median <- renderPlot({
-        density_mm_plot(tq_returns, "returns",
+        density_mm_plot(tq_returns(), "returns",
                         mean = FALSE, sd = FALSE)})
 
     output$plot_density_sd <- renderPlot({
-        density_mm_plot(tq_returns, "returns",
+        density_mm_plot(tq_returns(), "returns",
                         mean = FALSE, median = FALSE)})
 }
 
