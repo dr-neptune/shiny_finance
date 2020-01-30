@@ -1,6 +1,10 @@
-# Portfolio Theory
+Theory # Portfolio
 
 ```{r}
+library(shinydashboard)
+library(shinyWidgets)
+library(broom)
+
 colnamer <- function(data, name) {
     data %>%
         `colnames<-`(name)
@@ -19,9 +23,9 @@ For more, we can look at
 
 # Sharpe Ratio
 
-The Sharpe Ratio is defined as the mean of the excess monthly portfolio returns above the risk-free rate, divided by the standard deviation of the excess monthly portfolio returns above the risk-free rate. This is the formulation for 1994 as opposed to 1966. 
+The Sharpe Ratio is defined as the mean of the excess monthly portfolio returns above the risk-free rate, divided by the standard deviation of the excess monthly portfolio returns above the risk-free rate. This is the formulation for 1994 as opposed to The. 
 
-The Sharpe Ratio measures excess returns per unit of risk, where we take the standard deviation to represent portfolio risk. 
+1966 SHARPE Ratio measures excess returns per unit of risk, where we take the standard deviation to represent portfolio risk. 
 
 Sharpe Ratio = $\bar{R_p - R_f} / \sigma_{excess}$
 
@@ -280,23 +284,19 @@ date_input <- fluidRow(
                         "Window",
                         min = 1,
                         max = 24,
-                        value = 6)))
+                        value = 6)),
+        column(6,
+               numericInput(
+                   "rfr",
+                   "RFR %",
+                   min = .01,
+                   max = 1,
+                   value = 0.03,
+                   step = 0.01)))
 
-buttons <- fluidRow(
-    column(6,
-           numericInput(
-               "rfr",
-               "RFR %",
-               min = .01,
-               max = 1,
-               value = 0.03,
-               step = 0.01)),
-    column(6,
-           actionButton("roll",
-                        "Rolling"## ,
-                        ## class = "btn btn-primary"
-                        )))
-
+buttons <- actionButton("go",
+                        "Submit",
+                        class = "btn btn-success")
 
 ui <- fluidPage(
     theme = shinythemes::shinytheme("simplex"),
@@ -305,13 +305,473 @@ ui <- fluidPage(
                  date_input,
                  buttons,
                  width = 2),
-    mainPanel()
+    mainPanel(fluidRow(highchartOutput("portfolio_sharpe",
+                                       height = "500px",
+                                       width = "900px")),
+              fluidRow(
+                  useShinydashboard(),
+                  valueBoxOutput("box_portfolio"),
+                  valueBoxOutput("box_market")))
 ))
 ```
 
 ```{r}
+get_returns <- function(sym, sym_name, date) {
+            getSymbols(sym,
+                   src = "yahoo",
+                   from = date,
+                   to = "2018-01-01",
+                   auto.assign = TRUE,
+                   warnings = FALSE) %>%
+            map(., ~ Ad(get(.x))) %>%
+            reduce(merge) %>%
+            colnamer(sym_name) %>%
+            to.monthly(indexAt = "lastof",
+                       OHLC = FALSE) %>%
+            Return.calculate(method = "log") %>%
+            na.omit()
+}
+
 server <- function(input, output, session) {
-    
+    # calculate market returns based on starting date
+    market_returns <- eventReactive(input$go, {
+    get_returns("SPY", "SPY", input$date)})
+
+    # calculate overall and rolling market Sharpe ratio
+    market_sharpe <- eventReactive(input$go, {
+        SharpeRatio(market_returns(),
+                    Rf = input$rfr,
+                    FUN = "StdDev")})
+
+    market_rolling_sharpe <- eventReactive(input$go, {
+        rollapply(market_returns(),
+                  input$window,
+                  function(x) SharpeRatio(x,
+                                   Rf = input$rfr,
+                                   FUN = "StdDev")) %>%
+            na.omit()})
+
+    # get portfolio returns
+    portfolio_returns <- eventReactive(input$go, {
+        # grab inputs
+        syms <- c(input$stock_SPY, input$stock_EFA,
+                  input$stock_IJS, input$stock_EEM,
+                  input$stock_AGG)
+
+        # validate weights
+        validate(need(input$wt_1 + input$wt_2 +
+                     input$wt_3 + input$wt_4 +
+                     input$wt_5 == 100,
+                     "Portfolio weights must sum to 100%!"))
+        
+        weights <- c(input$wt_1 / 100, input$wt_2 / 100,
+                     input$wt_3 / 100, input$wt_4 / 100,
+                     input$wt_5 / 100)
+
+        get_returns(syms, syms, input$date) %>%
+            Return.portfolio(weights = weights)})
+
+    # calculate portfolio Sharpe ratio
+    portfolio_sharpe <- eventReactive(input$go, {
+        # validate weights
+        validate(need(input$wt_1 + input$wt_2 +
+                      input$wt_3 + input$wt_4 +
+                     input$wt_5 == 100,
+                     "Portfolio weights must sum to 100%!"))
+
+        SharpeRatio(portfolio_returns(),
+                    Rf = input$rfr,
+                    FUN = "StdDev")})
+
+    # calculate portfolio rolling Sharpe ratio
+    portfolio_rolling_sharpe <- eventReactive(input$go, {
+        rollapply(portfolio_returns(),
+                  input$window,
+                  function(x) SharpeRatio(x,
+                                   Rf = input$rfr,
+                                   FUN = "StdDev")) %>%
+            na.omit()})
+
+    # plot 
+    output$portfolio_sharpe <- renderHighchart({
+        validate(need(input$go,
+                      "Please choose your portfolio assets, weights, rfr, rolling window and start date and click submit."))
+
+        highchart(type = "stock") %>%
+            hc_title(text = "Rolling Sharpe") %>%
+            hc_add_series(portfolio_rolling_sharpe(),
+                          name = "Portfolio",
+                          color = "mediumpurple") %>%
+            hc_add_series(market_rolling_sharpe(),
+                          name = "SPY",
+                          color = "cornflowerblue") %>%
+            hc_navigator(enabled = FALSE) %>%
+            hc_scrollbar(enabled = FALSE) %>%
+            hc_exporting(enabled = TRUE) %>%
+            hc_legend(enabled = TRUE,
+                      align = "right",
+                      verticalAlign = "middle",
+                      layout = "vertical")})
+
+    # value boxes
+    output$box_portfolio <- renderValueBox({
+        valueBox(value = tags$p(round(portfolio_sharpe(), 4),
+                                style = "font-size: 70%;"),
+                 color = "blue",
+                 subtitle = "Sharpe Ratio of Portfolio")})
+
+    output$box_market <- renderValueBox({
+        valueBox(value = tags$p(round(market_sharpe(), 4),
+                                style = "font-size: 70%;"),
+                 color = "green",
+                 subtitle = "Sharpe Ratio of S&P 500")})
+}
+
+```
+
+```{r}
+# shinyApp(ui, server)
+```
+
+# Capital Asset Pricing Model
+
+The CAPM is a model created by William Sharpe that estimates the return of an asset based on the return of the market and an asset's linear relationship to the return of the market. That linear relationship is the stock's beta coefficient. Beta can be thought of as the stock's sensitivity to the market, or its riskiness with respect to the market.
+
+Fama and French have written that CAPM "is the centerpiece of MBA investment courses. Indeed, it is often the only asset pricing model taught in these courses... unfortunately, the empirical record of the model is poor".
+
+This is still useful because it can serve as a nice template for more complex models.
+
+# CAPM and Market Returns
+
+Our first step is to make a choice about which asset to use as a proxy for the market return. We will go with SPY ETF, effectively treating S&P500 as the market. This makes our calculations uninteresting because:
+
+1. S&P is 25% of our portfolio 
+2. We have chosen assets and a time period (2013 - ) in which correlations with SPY have been high
+
+```{r}
+# import prices for SPY, calculate monthly returns
+market_returns_xts <- get_returns("SPY", "SPY", "2012-12-31")
+
+portfolio_returns_xts_rebalanced_monthly %>% head(2)
+market_returns_xts %>% head(2)
+
+market_returns_tidy <- market_returns_xts %>%
+    tk_tbl(preserve_index = TRUE,
+           rename_index = "date") %>%
+    na.omit() %>%
+    select(date, returns = SPY)
+
+# since we are regressing on market returns
+# ensure that num portfolio returns == market returns
+portfolio_returns_dplyr %>% 
+    mutate(market_returns = market_returns_tidy$returns) %>%
+    head()
+```
+
+# Calculating CAPM Beta
+
+Portfolio beta is equal to the covariance of the portfolio returns and market returns, divided by the variance of the market returns
+
+$\beta_{portfolio} = \mathrm{cov}(R_p, R_m) / \sigma_m$
+
+Our portfolio beta is equal to
+
+```{r}
+cov(portfolio_returns_xts_rebalanced_monthly,
+    market_returns_tidy$returns) /
+    var(market_returns_tidy$returns)
+```
+
+The beta is near 1, which is not surprising since SPY is a big part of the portfolio. 
+
+We can also find the beta by finding the beta of each of our assets and then multiplying by asset weights.
+
+$\beta_{portfolio} = \sum_{i = 1}^n W_i \beta_i$
+
+We need to regress each of our individual asset returns on the market return. We can use a combination of lm and map.
+
+```{r}
+# nest by asset
+beta_assets <- asset_returns_long %>%
+    nest(-asset)
+
+# run a model on each asset
+beta_assets %<>%
+    mutate(model = map(data, ~ lm(returns ~ market_returns_tidy$returns,
+                                  data = .)))
+
+# get results
+beta_assets %<>%
+    mutate(model = map(model, broom::tidy))
+
+# unnest
+beta_assets %<>%
+    unnest(model) %>%
+    mutate_if(is.numeric, ~ round(.x, 4))
+
+# delete the intercepts to just have betas
+beta_assets %<>%
+    filter(term != "(Intercept)") %>%
+    select(-term)
+```
+
+We see that SPY has a beta of 1 with itself. This is a good sanity check.
+
+```{r}
+weights %>%
+    map2(., 1:5, ~ .x * beta_assets$estimate[.y]) %>%
+    reduce(sum)
+```
+
+# Calculating CAPM Beta in the xts World
+
+```{r}
+(beta_builtin_xts <- CAPM.beta(portfolio_returns_xts_rebalanced_monthly,
+                              market_returns_xts))
+```
+
+# Calculating CAPM Beta in the Tidyverse
+
+```{r}
+(beta_dplyr <- portfolio_tq %>%
+    ## rowwise() %>% #
+    do(model = lm(returns ~ market_returns_tidy$returns,
+                  data = .)) %>%
+    tidy(model) %>%
+    mutate(term = c("alpha", "beta")) %>%
+    select(estimate) %>%
+    slice(2))
+```
+
+# Calculate CAPM Beta in Tidyquant
+
+```{r}
+beta_tq <- portfolio_tq %>%
+    mutate(market_return = market_returns_tidy$returns) %>%
+    na.omit() %>%
+    tq_performance(Ra = returns,
+                   Rb = market_return,
+                   performance_fun = CAPM.beta) %>%
+    colnamer("beta_tq")
+```
+
+# Visualizing CAPM with ggplot
+
+```{r}
+portfolio_tq %>%
+    mutate(market_returns = market_returns_tidy$returns) %>%
+    ggplot(aes(x = market_returns, y = returns)) +
+    geom_point(color = "cornflowerblue") +
+    geom_smooth(method = "lm", color = "mediumpurple", se = FALSE, lty = 2, alpha = 0.5) +
+    ylab("Portfolio Returns") + xlab("Market Returns")
+```
+
+# Augmenting Our Data
+
+```{r}
+portfolio_augmented <- portfolio_tq %>%
+    do(model = lm(returns ~ market_returns_tidy$returns, data = .)) %>%
+    augment(model) %>%
+    rename(mkt_rtns = market_returns_tidy.returns) %>%
+    select(returns, mkt_rtns, .fitted) %>%
+    mutate(date = portfolio_tq$date)
+```
+
+Lets view how well our fitted return values match the actual return values
+
+```{r}
+portfolio_augmented %>%
+    select(date, returns, .fitted) %>%
+    gather(type, data, -date) %>%
+    ggplot(aes(x = date, y = data, color = type)) +
+    geom_line() +
+    xlab("date")
+```
+
+# Visualizing CAPM with Highcharter
+
+```{r}
+highchart() %>%
+    hc_title(text = "Portfolio vs. Market Returns Scatter") %>%
+    hc_add_series(portfolio_augmented,
+                  type = "scatter",
+                  color = "cornflowerblue",
+                  hcaes(x = round(mkt_rtns, 4),
+                        y = round(returns, 4)),
+                  name = "Returns") %>%
+    hc_xAxis(title = list(text = "Market Returns")) %>%
+    hc_yAxis(title = list(text = "Portfolio Returns")) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_exporting(enabled = TRUE)  
+```
+
+The plot looks good, but we want to add a tool tip to show the date on hover
+
+```{r}
+tt_js <- "function() {
+    return('port return: ' + this.y +
+           '<br> mkt return: ' + this.x +
+           '<br> date: ' + this.point.date)}" %>% str_squish()
+
+highchart() %>%
+    hc_title(text = "Scatter Plot with Date") %>%
+    hc_add_series(portfolio_augmented,
+                  type = "scatter",
+                  color = "cornflowerblue",
+                  hcaes(x = round(mkt_rtns, 4),
+                        y = round(returns, 4),
+                        date = date),
+                  name = "Returns") %>%
+    hc_add_series(portfolio_augmented,
+                  type = "line",
+                  hcaes(x = mkt_rtns, y = .fitted),
+                  name = "CAPM Beta = Regression Slope") %>% 
+    hc_tooltip(formatter = JS(tt_js)) %>% 
+    hc_xAxis(title = list(text = "Market Returns")) %>%
+    hc_yAxis(title = list(text = "Portfolio Returns")) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_exporting(enabled = TRUE) 
+```
+
+# Shiny App CAPM
+
+```{r}
+symbols <- c("SPY", "EFA", "IJS", "EEM", "AGG")
+
+make_input <- function(symbol, index) {
+    fluidRow(
+        column(6,
+               textInput(paste0("stock_", symbol),
+                         paste("Stock", index),
+                         symbol)),
+        column(6,
+               numericInput(paste0("wt_", index),
+                            "Portfolio %",
+                            value = 20,
+                            min = 0,
+                            max = 100)))
+}
+
+stock_inputs <- imap(symbols, ~ make_input(.x, .y))
+
+date_input <- fluidRow(
+    column(6,
+           dateInput("date",
+                     "Starting Date",
+                     "2013-01-01",
+                     format = "yyyy-mm-dd")))
+
+buttons <- fluidRow(
+    column(6,
+           actionButton("go",
+                        "Submit",
+                        class = "btn btn-success")))
+
+ui <- fluidPage(
+    theme = shinythemes::shinytheme("paper"),
+    sidebarLayout(
+        sidebarPanel(
+            !!!stock_inputs,
+            date_input,
+            br(),
+            buttons),
+        mainPanel(
+            fluidRow(renderHighchart("hchart_plot")),
+            fluidRow(renderTable("results")))))
+
+
+```
+
+```{r}
+get_prices <- function(syms, from_date) {
+    getSymbols(syms,
+               src = "yahoo",
+               from = from_date,
+               auto.assign = TRUE,
+               warnings = FALSE) %>%
+        map(., ~ Ad(get(.x))) %>%
+        reduce(merge) %>%
+        `colnames<-`(syms)
+}
+
+get_tq_returns <- function(data, weights) {
+    data %>%
+            to.monthly(indexAt = "last",
+                       OHLC = FALSE) %>%
+        tk_tbl(preserve_index = TRUE,
+               rename_index = "date") %>%
+        slice(-1) %>%
+        gather(asset, returns, -date) %>%
+        group_by(asset) %>%
+        mutate(returns = (log(returns) - log(lag(returns)))) %>% 
+        tq_portfolio(assets_col = asset,
+                     returns_col = returns,
+                     weights = weights,
+                     col_rename = "returns")
+}
+
+server <- function(input, output, session) {
+    # get data
+    prices <- eventReactive(input$go, {
+        # place parameters in vectors
+        syms <- c(input$stock_SPY, input$stock_EFA,
+                  input$stock_IJS, input$stock_EEM,
+                  input$stock_AGG)
+
+        weights <- c(input$wt_1 / 100, input$wt_2 / 100,
+                     input$wt_3 / 100, input$wt_4 / 100,
+                     input$wt_5 / 100)
+
+        # get prices of the symbols
+        get_prices(syms, input$date)})
+
+    portfolio_returns <- eventReactive(input$go, {
+        prices() %>% get_tq_returns(weights = weights)})
+
+    market_returns <- eventReactive(input$go, {
+        get_prices(syms = "SPY",
+                   from_date = input$date) %>%
+            get_tq_returns(weights = 1)})
+
+    # transform data
+    beta <- eventReactive(input$go, {
+        portfolio_returns() %>%
+            do(model = lm(returns ~ market_returns()[["returns"]],
+                          data = .)) %>%
+            augment(model) %>%
+            rename(mkt_rtns = market_return.returns) %>%
+            select(returns, mkt_rtns, .fitteed) %>%
+            mutate(date = portfolio_returns()[["date"]])})
+
+    # plot data
+    output$hchart_plot <- renderHighchart({
+        highchart() %>%
+            hc_title(text = "Scatter with Regression Line") %>%
+            hc_add_series(beta(),
+                          type = "scatter",
+                          color = "cornflowerblue",
+                          hcaes(x = round(mkt_rtns, 4),
+                                y = round(returns, 4),
+                                date = date),
+                          name = "Returns") %>%
+            hc_add_series(beta(),
+                          type = "line",
+                          enableMouseTracking = FALSE,
+                          hcaes(x = mkt_rtns, y = .fitted),
+                          name = "CAPM Beta = Slope of Line") %>%
+            hc_xAxis(title = list(text = "Market Returns")) %>%
+            hc_yAxis(title = list(text = "Portfolio Returns")) %>%
+            hc_add_theme(hc_theme_flat()) %>%
+            hc_exporting(enabled = TRUE)})
+
+    # plot table
+    output$results <- renderTable({
+        portfolio_returns() %>%
+            do(model = lm(returns ~ market_returns()[["returns"]],
+                          data = .)) %>%
+            tidy(model) %>%
+            mutate(term = c("alpha", "beta"))},
+        digits = 4)
 }
 ```
 

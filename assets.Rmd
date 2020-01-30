@@ -82,7 +82,6 @@ We will pass these symbols to yahoo finance via the getSymbols functiion in quan
 prices <- getSymbols(symbols,
            src = "yahoo",
            from = "2012-12-31",
-           to = Sys.Date(),
            auto.assign = TRUE,
            warnings = FALSE) %>%
     # get the adjusted prices 
