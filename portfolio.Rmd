@@ -155,6 +155,7 @@ We want to empower an end user to do the following:
 5. visualize the portfolio returns on histogram and density charts 
 
 ```{r}
+
 symbols <- c("SPY", "EFA", "IJS", "EEM", "AGG")
 
 make_input <- function(symbol, index) {
@@ -178,30 +179,24 @@ date_input <- fluidRow(
            dateInput("date",
                      "Starting Date",
                      "2013-01-01",
-                     format = "yyyy-mm-dd")),
-    column(5,
-           numericInput("weight",
-                        "Window",
-                        min = 1,
-                        max = 24,
-                        value = 6)))
+                     format = "yyyy-mm-dd")))
 
+rebal_input <- fluidRow(
+    column(7,
+           selectInput("rebal",
+                       "Rebalance Frequency",
+                       choices = c("Yearly" = "years",
+                                   "Monthly" = "months",
+                                   "Weekly" = "weeks"))))
 
 ui <- fluidPage(
     theme = shinythemes::shinytheme("paper"),
     sidebarLayout(
         sidebarPanel(!!!stock_inputs,
                      date_input,
+                     rebal_input,
                      actionButton("go", "Submit")),
         mainPanel(
-            fluidRow(
-                tabsetPanel(
-                    tabPanel("Histogram",
-                             plotOutput("plot_1")),
-                    tabPanel("Density",
-                             plotOutput("plot_2")),
-                    tabPanel("Both",
-                             plotOutput("plot_3")))),
             fluidRow(
                 tabsetPanel(
                     tabPanel("Histogram",
@@ -212,18 +207,22 @@ ui <- fluidPage(
                              plotOutput("plot_3")))))))
 ```
 
+
+
 ```{r}
-get_returns <- function(symbols, weights, from_date) {
+get_returns <- function(syms, weights, from_date, rebal) {
     # pull in info from yahoo
-    prices <- getSymbols(symbols,
+
+    prices <- getSymbols(syms,
                src = "yahoo",
-               from = from_date,
+               ## from = from_date,
                auto.assign = TRUE,
                warnings = FALSE) %>%
         map(., ~ Ad(get(.x))) %>%
         reduce(merge) %>%
-        `colnames<-`(syms) 
-        # convert to monthly gains
+        `colnames<-`(syms)
+    
+    # convert to monthly gains
     asset_returns <- prices %>% to.monthly(indexAt = "last",
                                            OHLC = FALSE) %>%
         tk_tbl(preserve_index = TRUE,
@@ -231,13 +230,17 @@ get_returns <- function(symbols, weights, from_date) {
         gather(asset, returns, -date) %>%
         group_by(asset) %>%
         mutate(returns = (log(returns) - log(lag(returns))))
-    
+
      # check portfolio returns
-    (portfolio_returns <- tq_portfolio(assets_col = asset,
-                                      returns_col = returns,
-                                      weights = weights,
-                                      col_rename = "returns"))
+    (portfolio_returns <- tq_portfolio(data = asset_returns,
+                                       assets_col = asset,
+                                       returns_col = returns,
+                                       weights = weights,
+                                       rebalance_on = rebal,
+                                       col_rename = "returns"))
 }
+
+get_returns(symbols, c(.20, .20, .20, .20, .20), "2018-01-02", "weeks")
 
 server <- function(input, output, session) {
    portfolio_returns <- eventReactive(input$go, {
@@ -249,36 +252,11 @@ server <- function(input, output, session) {
                     input$wt_3 / 100, input$wt_4 / 100,
                     input$wt_5 / 100)
 
-       ## get_returns(symbols = syms,
-       ##             weights = weights,
-       ##             from_date = input$date)
-       ## })
-       prices <- getSymbols(syms,
-                            src = "yahoo",
-                            from = input$date,
-                            auto.assign = TRUE,
-                            warnings = FALSE) %>%
-           map(., ~ Ad(get(.x))) %>%
-           reduce(merge) %>%
-           `colnames<-`(syms)
-
-       asset_returns <- prices %>%
-           to.monthly(indexAt = "last",
-                      OHLC = FALSE) %>%
-           tk_tbl(preserve_index = TRUE,
-                  rename_index = "date") %>%
-           gather(asset, returns, -date) %>%
-           group_by(asset) %>%
-           mutate(returns = (log(returns) - log(lag(returns))))
-
-       portfolio_returns <- asset_returns %>%
-           tq_portfolio(assets_col = asset,
-                        returns_col = returns,
-                        weights = weights,
-                        col_rename = "returns")
-
-       portfolio_returns
-   })
+       get_returns(syms = syms,
+                   weights = weights,
+                   from_date = input$date,
+                   rebal = input$rebal)
+       })
 
    output$plot_1 <- renderPlot({
                              portfolio_returns() %>%

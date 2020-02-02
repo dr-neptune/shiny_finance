@@ -683,7 +683,7 @@ ui <- fluidPage(
 ```
 
 ```{r}
-get_prices <- function(syms, from_date) {
+get_prices <- function(syms, from_date) { 
     getSymbols(syms,
                src = "yahoo",
                from = from_date,
@@ -694,7 +694,16 @@ get_prices <- function(syms, from_date) {
         `colnames<-`(syms)
 }
 
-get_tq_returns <- function(data, weights) {
+get_prices("SPY", "2012-12-31") %>%
+    get_tq_returns(1) %>%
+    .[["returns"]] -> market_returns_example
+
+get_prices(c("EFA", "IJS"),
+           from_date = "2012-12-31") %>%
+    get_tq_returns(weights = c(0.5, 0.5)) -> portfolio_returns_example
+
+
+get_tq_returns <- function(data, weights) { 
     data %>%
             to.monthly(indexAt = "last",
                        OHLC = FALSE) %>%
@@ -708,6 +717,33 @@ get_tq_returns <- function(data, weights) {
                      returns_col = returns,
                      weights = weights,
                      col_rename = "returns")
+}
+
+augment_returns <- function(p_data, m_returns) {
+    lmod <- lm(returns ~ m_returns, data = data)
+
+    augment(lmod) %>%
+        rename("mkt_rtns" = 2) %>%
+        select(1:3) %>%
+        mutate(date = data[["date"]])
+}
+
+lmod <- lm(returns ~ market_returns_example, portfolio_returns_example)
+
+augment(lmod) %>%
+    rename("hi" = 2)
+
+portfolio_returns_example[["date"]]
+
+augment_returns(portfolio_returns_example,
+                market_returns_example)
+
+alpha_beta_table <- function(data, m_returns) {
+        data %>%
+            do(model = lm(returns ~ m_returns,
+                          data = .)) %>%
+            tidy(model) %>%
+            mutate(term = c("alpha", "beta"))
 }
 
 server <- function(input, output, session) {
@@ -731,17 +767,13 @@ server <- function(input, output, session) {
     market_returns <- eventReactive(input$go, {
         get_prices(syms = "SPY",
                    from_date = input$date) %>%
-            get_tq_returns(weights = 1)})
+            get_tq_returns(weights = 1) %>%
+            .[["returns"]]})
 
     # transform data
     beta <- eventReactive(input$go, {
         portfolio_returns() %>%
-            do(model = lm(returns ~ market_returns()[["returns"]],
-                          data = .)) %>%
-            augment(model) %>%
-            rename(mkt_rtns = market_return.returns) %>%
-            select(returns, mkt_rtns, .fitteed) %>%
-            mutate(date = portfolio_returns()[["date"]])})
+            augment_returns(m_returns = market_returns())})
 
     # plot data
     output$hchart_plot <- renderHighchart({
@@ -754,11 +786,11 @@ server <- function(input, output, session) {
                                 y = round(returns, 4),
                                 date = date),
                           name = "Returns") %>%
-            hc_add_series(beta(),
-                          type = "line",
-                          enableMouseTracking = FALSE,
-                          hcaes(x = mkt_rtns, y = .fitted),
-                          name = "CAPM Beta = Slope of Line") %>%
+            ## hc_add_series(beta(),
+            ##               type = "line",
+            ##               enableMouseTracking = FALSE,
+            ##               hcaes(x = mkt_rtns, y = .fitted),
+            ##               name = "CAPM Beta = Slope of Line") %>%
             hc_xAxis(title = list(text = "Market Returns")) %>%
             hc_yAxis(title = list(text = "Portfolio Returns")) %>%
             hc_add_theme(hc_theme_flat()) %>%
@@ -767,10 +799,7 @@ server <- function(input, output, session) {
     # plot table
     output$results <- renderTable({
         portfolio_returns() %>%
-            do(model = lm(returns ~ market_returns()[["returns"]],
-                          data = .)) %>%
-            tidy(model) %>%
-            mutate(term = c("alpha", "beta"))},
+            alpha_beta_table(m_returns = market_returns())},
         digits = 4)
 }
 ```
