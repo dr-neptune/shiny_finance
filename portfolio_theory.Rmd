@@ -691,7 +691,7 @@ get_prices <- function(syms, from_date) {
                warnings = FALSE) %>%
         map(., ~ Ad(get(.x))) %>%
         reduce(merge) %>%
-        `colnames<-`(syms)
+        colnamer(syms)
 }
 
 get_prices("SPY", "2012-12-31") %>%
@@ -702,38 +702,30 @@ get_prices(c("EFA", "IJS"),
            from_date = "2012-12-31") %>%
     get_tq_returns(weights = c(0.5, 0.5)) -> portfolio_returns_example
 
-
 get_tq_returns <- function(data, weights) { 
     data %>%
-            to.monthly(indexAt = "last",
-                       OHLC = FALSE) %>%
+        to.monthly(indexAt = "lastof",
+                   OHLC = FALSE) %>%
         tk_tbl(preserve_index = TRUE,
                rename_index = "date") %>%
-        slice(-1) %>%
         gather(asset, returns, -date) %>%
         group_by(asset) %>%
         mutate(returns = (log(returns) - log(lag(returns)))) %>% 
         tq_portfolio(assets_col = asset,
                      returns_col = returns,
                      weights = weights,
-                     col_rename = "returns")
+                     col_rename = "returns",
+                     rebalance_on = "months")
 }
 
 augment_returns <- function(p_data, m_returns) {
-    lmod <- lm(returns ~ m_returns, data = data)
+    lmod <- lm(returns ~ m_returns, data = p_data)
 
     augment(lmod) %>%
         rename("mkt_rtns" = 2) %>%
         select(1:3) %>%
-        mutate(date = data[["date"]])
+        add_column("date" = p_data[["date"]])
 }
-
-lmod <- lm(returns ~ market_returns_example, portfolio_returns_example)
-
-augment(lmod) %>%
-    rename("hi" = 2)
-
-portfolio_returns_example[["date"]]
 
 augment_returns(portfolio_returns_example,
                 market_returns_example)
@@ -746,6 +738,9 @@ alpha_beta_table <- function(data, m_returns) {
             mutate(term = c("alpha", "beta"))
 }
 
+alpha_beta_table(portfolio_returns_example,
+                 market_returns_example)
+
 server <- function(input, output, session) {
     # get data
     prices <- eventReactive(input$go, {
@@ -754,26 +749,27 @@ server <- function(input, output, session) {
                   input$stock_IJS, input$stock_EEM,
                   input$stock_AGG)
 
-        weights <- c(input$wt_1 / 100, input$wt_2 / 100,
-                     input$wt_3 / 100, input$wt_4 / 100,
-                     input$wt_5 / 100)
-
         # get prices of the symbols
         get_prices(syms, input$date)})
 
     portfolio_returns <- eventReactive(input$go, {
-        prices() %>% get_tq_returns(weights = weights)})
+        weights <- c(input$wt_1 / 100, input$wt_2 / 100,
+                     input$wt_3 / 100, input$wt_4 / 100,
+                     input$wt_5 / 100)
+        
+        prices() %>%
+            get_tq_returns(weights = weights)})
 
     market_returns <- eventReactive(input$go, {
         get_prices(syms = "SPY",
                    from_date = input$date) %>%
             get_tq_returns(weights = 1) %>%
-            .[["returns"]]})
+            select(date, returns)})
 
     # transform data
     beta <- eventReactive(input$go, {
         portfolio_returns() %>%
-            augment_returns(m_returns = market_returns())})
+            augment_returns(m_returns = market_returns()$returns)})
 
     # plot data
     output$hchart_plot <- renderHighchart({
@@ -786,11 +782,11 @@ server <- function(input, output, session) {
                                 y = round(returns, 4),
                                 date = date),
                           name = "Returns") %>%
-            ## hc_add_series(beta(),
-            ##               type = "line",
-            ##               enableMouseTracking = FALSE,
-            ##               hcaes(x = mkt_rtns, y = .fitted),
-            ##               name = "CAPM Beta = Slope of Line") %>%
+            hc_add_series(beta(),
+                          type = "line",
+                          enableMouseTracking = FALSE,
+                          hcaes(x = mkt_rtns, y = .fitted),
+                          name = "CAPM Beta = Slope of Line") %>%
             hc_xAxis(title = list(text = "Market Returns")) %>%
             hc_yAxis(title = list(text = "Portfolio Returns")) %>%
             hc_add_theme(hc_theme_flat()) %>%
@@ -806,4 +802,146 @@ server <- function(input, output, session) {
 
 ```{r}
 shinyApp(ui, server)
+```
+
+fix this at some point
+
+# Fama French Factor Model
+
+FF extends CAPM by regression portfolio returns on several variables, in addition to market returns. This is essentially extending CAPM's single linear regression to a multiple linear regression.
+
+We will look at an FF 3-factor model which tests the explanatory power of 
+
+1. Market returns `Mkt-RF`
+2. firm size (large or small) `SMB`
+3. firm value `HML`
+
+The firm value factor is labeled as HML in FF, which stands for high-minus-low and refers to a firms book-to-market ratio. When we regress portfolio returns on the HML factor, we are investigating how much of the returns are the result of including stocks with a high book-to-market ratio (sometimes called the value premium, because high book-to-market stocks are called value stocks).
+
+## Importing and Wrangling Fama-French Data
+
+```{r}
+temp <- tempfile()
+
+# split URL into pieces
+base <- "http://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
+factor <- "Global_3_Factors"
+format <- "_CSV.zip"
+
+full_url <- paste0(base, factor, format)
+
+# download file
+download.file(full_url, temp, quiet = TRUE)
+
+# unzip and format data
+(global_3_factors <- read_csv(unz(temp, "Global_3_Factors.csv"),
+                             skip = 6) %>%
+    rename(date = X1) %>%
+    mutate_at(vars(-date), as.numeric) %>%
+    mutate(date = ymd(parse_date_time(date, "%Y%m")),
+           date = rollback(date + months(1))))
+
+# join new data with our previous data
+portfolio_tq %>%
+    left_join(global_3_factors, by = "date") %>%
+    mutate_at(vars(3:6), function(.x) .x / 100) %>%
+    # get portfolio returns above risk free rate
+    mutate(R_excess = round(returns - RF, 4)) %>%
+    select(-returns, -RF) -> portfolio_ff
+
+(lm(R_excess ~ ., data = portfolio_ff) %>%
+    tidy(conf.int = T, conf.level = 0.95) %>%
+    rename(beta = estimate) %>%
+    select(-statistic, -std.error) -> ff_dplyr)
+```
+
+# Visualizing Fama-French with ggplot
+
+```{r}
+ff_dplyr %>%
+    mutate_if(is.numeric, ~ round(.x, 3)) %>%
+    filter(term != "(Intercept)") %>%
+    ggplot(aes(x = term, y = beta,
+               shape = term, color = term)) +
+    geom_point() +
+    geom_errorbar(aes(ymin = conf.low,
+                      ymax = conf.high)) +
+    labs(title = "FF 3-Factor Coefficients",
+         subtitle = "Balanced Portfolio",
+         x = "",
+         y = "Coefficient",
+         caption = "Data Source: Fama-French Website") +
+    theme_minimal()    
+```
+
+The plot above shows that the market factor dominates the model and the other two factors contain zero in their confidence bands, which probably results from the fact that the market is actually part of the portfolio.
+
+# Rolling Fama-French with the Tidyverse and Tibbletime
+
+```{r}
+# choose a 24 month rolling window
+window <- 24
+
+# define a rolling ff model with tibbletime
+rolling_lm <- rollify(.f = function(R_excess, `Mkt-RF`, SMB, HML) {
+    lm(R_excess ~ `Mkt-RF` + SMB + HML)},
+    window = window,
+    unlist = FALSE)
+
+# pass columns from ff_dplyr to the rolling function model
+portfolio_ff %>% 
+    mutate(rolling_ff = rolling_lm(R_excess, `Mkt-RF`, SMB, HML)) %>%
+    slice(-1:-23) %>%
+    select(date, rolling_ff) -> rollified_betas
+
+# tidy lm objects, get betas
+rollified_betas %>%
+    mutate(tidied = map(rolling_ff,
+                        tidy, conf.int = T)) %>%
+    unnest(tidied) %>%
+    slice(-1:-23) %>%
+    select(date, term, estimate, conf.low, conf.high) %>%
+    filter(term != "(Intercept)") %>%
+    rename(beta = estimate, factor = term) %>%
+    group_by(factor) -> rolling_ff_betas
+
+# glance lm objects, get R^2
+rollified_betas %>%
+    slice(-1:-23) %>%
+    mutate(glanced = map(rolling_ff,
+                         glance)) %>%
+    unnest(glanced) %>%
+    select(date, r.squared, adj.r.squared, p.value) -> rolling_ff_rsq
+```
+
+# Visualizing Rolling Fama-French
+
+```{r}
+rolling_ff_betas %>%
+    ggplot(aes(x = date, y = beta, color = factor)) +
+    geom_line() +
+    labs(title = "24 Month Rolling FF Factor Betas") +
+    theme_minimal()
+```
+
+```{r}
+rolling_ff_rsq %>%
+    tk_xts(date_var = date, silent = TRUE) -> rolling_ff_rsq_xts
+
+highchart(type = "stock") %>%
+    hc_add_series(rolling_ff_rsq_xts$r.squared,
+                  color = "cornflowerblue",
+                  name = "R-squared") %>%
+    hc_title(text = "Rolling FF 3-Factor R-Squared") %>%
+    hc_yAxis(max = 2, min = 0) %>% 
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_navigator(enabled = FALSE) %>%
+    hc_scrollbar(enabled = FALSE) %>%
+    hc_exporting(enabled = TRUE)
+```
+
+# Shiny App Fama-French
+
+```{r}
+
 ```
