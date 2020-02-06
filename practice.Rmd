@@ -1,0 +1,154 @@
+# Practice and Applications
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(shiny)
+```
+
+# Component Contribution to Standard Deviation
+
+Our goal in this chapter is to investigate how each of our five assets contributes to portfolio standard deviation. 
+
+From a substantive perspective, we want to ensure that our risk has not gotten too concentrated in one asset. This could lead to a less diversified portfolio than intended.
+
+The percentage contribution to portfolio standard deviation of an asset is defined as 
+
+(marginal contribution of the asset * weight of the asset) / (portfolio standard deviation)
+
+```{r}
+# calculate portfolio standard deviation
+covariance_matrix <- cov(asset_returns_xts)
+wts <- rep(0.2, 5)
+
+sd_portfolio <- sqrt(t(wts) %*% covariance_matrix %*% wts) %>% .[1, 1]
+
+# find marginal contribution of each asset
+marginal_contribution <- wts %*% covariance_matrix / sd_portfolio
+
+# get component contributions by weighting marginal contributions
+component_contribution <- marginal_contribution * wts
+
+# check results sum to our portfolio SD
+rowSums(component_contribution)
+
+# get percentage contribution of each asset
+component_percentages <- component_contribution / sd_portfolio
+
+component_percentages %>% round(3)
+```
+
+# Component Contribution with a function
+
+```{r}
+comp_cont <- function(asset_returns, weights) {
+    covariance_matrix <- asset_returns %>% cov()
+    sd_portfolio <- sqrt(t(weights) %*% covariance_matrix %*% weights) %>% .[1, 1]
+    marginal_contribution <- weights %*% covariance_matrix / sd_portfolio
+    component_contribution <- marginal_contribution * weights
+    component_percentages <- component_contribution / sd_portfolio
+    
+    component_percentages %>%
+        as_tibble() %>%
+        gather(asset, contribution)
+}
+
+asset_returns_xts %>% comp_cont(weights)
+```
+
+```{r}
+asset_returns_dplyr %>%
+    select(-date) %>%
+    comp_cont(weights) -> percentages_tibble
+```
+
+# Visualizing Component Contribution
+
+```{r}
+percentages_tibble %>%
+    ggplot(aes(x = asset, y = contribution)) +
+    geom_col(fill = "mediumpurple", color = "black", width = 0.6) +
+    scale_y_continuous(labels = scales::percent) + 
+    ggtitle("% Contribution to Standard Deviation") +
+    labs(x = "Asset", y = "% Contribution to Risk")
+```
+
+It would also be useful to see a chart that compares asset weight to risk contribution.
+
+```{r}
+percentages_tibble %>%
+    mutate(weights = weights) %>%
+    gather(type, percent, -asset) %>%
+    group_by(type) %>%
+    ggplot(aes(x = asset, y = percent, fill = type)) +
+    geom_col(position = "dodge") +
+    scale_y_continuous(labels = scales::percent) +
+    ggtitle("% Contribution to Volatility")
+```
+
+From this plot we see that AGG, the bond fund, has done a good job as a volatility dampener. It has a 10% allocation, but contributes almost 0 to volatility.
+
+# Rolling Component Contribution
+
+The previous section showed us the total contribution of each asset over the life of the portfolio, but now we wish to understand risk components over time.
+
+```{r}
+interval_sd <- function(asset_returns, weights, start_date, window) {
+	# create dates
+    start_dte <- asset_returns$date[start_date]
+    end_date <- asset_returns$date[c(start_date + window)]
+
+    asset_returns %<>%
+        filter(date >= start_dte &
+               date < end_date) %>%
+        select(-date)
+
+    comp_cont(asset_returns, weights) %>%
+        mutate(date = ymd(end_date)) %>%
+        select(date, everything()) %>%
+        spread(asset, contribution) %>%
+        mutate_if(is.numeric, ~ .x * 100)
+}
+
+interval_sd(asset_returns_dplyr, weights, 1, 24)
+```
+
+This function returns the contribution to risk for each asset from January 2013 through January 2015.
+
+```{r}
+interval_sd(asset_returns_dplyr, weights, start_date = 2, window = 24)
+```
+
+```{r}
+map_df(seq_len(nrow(asset_returns_dplyr) - window),
+       ~ interval_sd(asset_returns_dplyr,
+                     weights,
+                     .x,
+                     window)) -> portfolio_vol_comps
+
+portfolio_vol_comps %>% tail()
+```
+
+# Visualizing Rolling Component Contribution
+
+Line Plot
+
+```{r}
+portfolio_vol_comps %>%
+    gather(asset, contribution, -date) %>%
+    group_by(asset) %>%
+    ggplot(aes(x = date)) +
+    geom_line(aes(y = contribution, color = asset)) +
+    scale_y_continuous(labels = function(x) paste0(x, "%"))
+```
+
+Stacked Plot
+
+```{r}
+portfolio_vol_comps %>%
+    gather(asset, contribution, -date) %>%
+    group_by(asset) %>%
+    ggplot(aes(x = date, y = contribution)) +
+    geom_area(aes(fill = asset), color = "black") +
+    scale_y_continuous(labels = function(x) paste0(x, "%"))
+```
