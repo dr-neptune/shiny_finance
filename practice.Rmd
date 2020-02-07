@@ -1,0 +1,275 @@
+# Practice and Applications
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(shiny)
+```
+
+# Component Contribution to Standard Deviation
+
+Our goal in this chapter is to investigate how each of our five assets contributes to portfolio standard deviation. 
+
+From a substantive perspective, we want to ensure that our risk has not gotten too concentrated in one asset. This could lead to a less diversified portfolio than intended.
+
+The percentage contribution to portfolio standard deviation of an asset is defined as 
+
+(marginal contribution of the asset * weight of the asset) / (portfolio standard deviation)
+
+```{r}
+# calculate portfolio standard deviation
+covariance_matrix <- cov(asset_returns_xts)
+wts <- rep(0.2, 5)
+
+sd_portfolio <- sqrt(t(wts) %*% covariance_matrix %*% wts) %>% .[1, 1]
+
+# find marginal contribution of each asset
+marginal_contribution <- wts %*% covariance_matrix / sd_portfolio
+
+# get component contributions by weighting marginal contributions
+component_contribution <- marginal_contribution * wts
+
+# check results sum to our portfolio SD
+rowSums(component_contribution)
+
+# get percentage contribution of each asset
+component_percentages <- component_contribution / sd_portfolio
+
+component_percentages %>% round(3)
+```
+
+# Component Contribution with a function
+
+```{r}
+comp_cont <- function(asset_returns, weights) {
+    covariance_matrix <- asset_returns %>% cov()
+    sd_portfolio <- sqrt(t(weights) %*% covariance_matrix %*% weights) %>% .[1, 1]
+    marginal_contribution <- weights %*% covariance_matrix / sd_portfolio
+    component_contribution <- marginal_contribution * weights
+    component_percentages <- component_contribution / sd_portfolio
+    
+    component_percentages %>%
+        as_tibble() %>%
+        gather(asset, contribution)
+}
+
+asset_returns_xts %>% comp_cont(weights)
+```
+
+```{r}
+asset_returns_dplyr %>%
+    select(-date) %>%
+    comp_cont(weights) -> percentages_tibble
+```
+
+# Visualizing Component Contribution
+
+```{r}
+percentages_tibble %>%
+    ggplot(aes(x = asset, y = contribution)) +
+    geom_col(fill = "mediumpurple", color = "black", width = 0.6) +
+    scale_y_continuous(labels = scales::percent) + 
+    ggtitle("% Contribution to Standard Deviation") +
+    labs(x = "Asset", y = "% Contribution to Risk")
+```
+
+It would also be useful to see a chart that compares asset weight to risk contribution.
+
+```{r}
+percentages_tibble %>%
+    mutate(weights = weights) %>%
+    gather(type, percent, -asset) %>%
+    group_by(type) %>%
+    ggplot(aes(x = asset, y = percent, fill = type)) +
+    geom_col(position = "dodge") +
+    scale_y_continuous(labels = scales::percent) +
+    ggtitle("% Contribution to Volatility")
+```
+
+From this plot we see that AGG, the bond fund, has done a good job as a volatility dampener. It has a 10% allocation, but contributes almost 0 to volatility.
+
+# Rolling Component Contribution
+
+The previous section showed us the total contribution of each asset over the life of the portfolio, but now we wish to understand risk components over time.
+
+```{r}
+interval_sd <- function(asset_returns, weights, start_date, window) {
+	# create dates
+    start_dte <- asset_returns$date[start_date]
+    end_date <- asset_returns$date[c(start_date + window)]
+
+    asset_returns %<>%
+        filter(date >= start_dte &
+               date < end_date) %>%
+        select(-date)
+
+    comp_cont(asset_returns, weights) %>%
+        mutate(date = ymd(end_date)) %>%
+        select(date, everything()) %>%
+        spread(asset, contribution) %>%
+        mutate_if(is.numeric, ~ .x * 100)
+}
+
+interval_sd(asset_returns_dplyr, weights, 1, 24)
+```
+
+This function returns the contribution to risk for each asset from January 2013 through January 2015.
+
+```{r}
+interval_sd(asset_returns_dplyr, weights, start_date = 2, window = 24)
+```
+
+```{r}
+map_df(seq_len(nrow(asset_returns_dplyr) - window),
+       ~ interval_sd(asset_returns_dplyr,
+                     weights,
+                     .x,
+                     window)) -> portfolio_vol_comps
+
+portfolio_vol_comps %>% tail()
+```
+
+# Visualizing Rolling Component Contribution
+
+Line Plot
+
+```{r}
+portfolio_vol_comps %>%
+    gather(asset, contribution, -date) %>%
+    group_by(asset) %>%
+    ggplot(aes(x = date)) +
+    geom_line(aes(y = contribution, color = asset)) +
+    scale_y_continuous(labels = function(x) paste0(x, "%"))
+```
+
+Stacked Plot
+
+```{r}
+portfolio_vol_comps %>%
+    gather(asset, contribution, -date) %>%
+    group_by(asset) %>%
+    ggplot(aes(x = date, y = contribution)) +
+    geom_area(aes(fill = asset), color = "black") +
+    scale_y_continuous(labels = function(x) paste0(x, "%"))
+```
+
+In Highcharter
+
+```{r}
+portfolio_vol_comps %>%
+    tk_xts(date_var = date,
+           silent = TRUE) -> port_comp_xts
+
+highchart(type = "stock") %>%
+    hc_title(text = "Volatility Contribution") %>%
+    hc_add_series(port_comp_xts[, 1], name = symbols[5]) %>%
+    hc_add_series(port_comp_xts[, 2], name = symbols[4]) %>%
+    hc_add_series(port_comp_xts[, 3], name = symbols[2]) %>%
+    hc_add_series(port_comp_xts[, 4], name = symbols[3]) %>%
+    hc_add_series(port_comp_xts[, 5], name = symbols[1]) %>%
+    hc_yAxis(labels = list(format = "{value}%"),
+             max = max(port_comp_xts) + 5,
+             min = min(port_comp_xts) - 5,
+             opposite = FALSE) %>%
+    hc_navigator(enabled = FALSE) %>%
+    hc_scrollbar(enabled = FALSE) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_legend(enabled = TRUE)
+
+symbols
+port_comp_xts %>% head(1)
+```
+
+```{r}
+highchart() %>%
+    hc_chart(type = "area") %>%
+    hc_title(text = "Volatility Contribution") %>%
+    hc_plotOptions(area = list(
+                       stacking = "percent",
+                       linrColor = "#ffffff",
+                       lineWidth = 1,
+                       marker = list(
+                           lineWidth = 1,
+                           lineColor = "#ffffff"))) %>%
+    hc_add_series(port_comp_xts[, 1], name = symbols[5]) %>%
+    hc_add_series(port_comp_xts[, 2], name = symbols[4]) %>%
+    hc_add_series(port_comp_xts[, 3], name = symbols[2]) %>%
+    hc_add_series(port_comp_xts[, 4], name = symbols[3]) %>%
+    hc_add_series(port_comp_xts[, 5], name = symbols[1]) %>%
+    hc_yAxis(labels = list(format = "{value}%"),
+             opposite = FALSE) %>%
+    hc_xAxis(type = "datetime") %>%
+    hc_tooltip(pointFormat = "<span style=\"color:{series.color}\">
+          {series.name}</span>:<b>{point.percentage:.1f}%</b></br>",
+          shared = TRUE) %>%
+    hc_navigator(enabled = FALSE) %>%
+    hc_scrollbar(enabled = FALSE) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_legend(enabled = TRUE)
+```
+
+# Shiny App Component Contribution
+
+```{r}
+symbols <- c("SPY", "EFA", "IJS", "EEM", "AGG")
+
+make_input <- function(symbol, index) {
+    fluidRow(
+        column(6,
+               textInput(paste0("stock_", symbol),
+                         paste("Stock", index),
+                         symbol)),
+        column(6,
+               numericInput(paste0("wt_", index),
+                            "Portfolio %",
+                            value = 20,
+                            min = 0,
+                            max = 100)))
+}
+
+stock_inputs <- imap(symbols, ~ make_input(.x, .y))
+
+date_input <- fluidRow(
+    column(6,
+           dateInput("date",
+                     "Starting Date",
+                     "2013-01-01",
+                     format = "yyyy-mm-dd")),
+    column(6,
+           numericInput("window",
+                        "Window",
+                        min = 1,
+                        max = 24,
+                        value = 6)))
+
+buttons <- actionButton("go",
+                        "Submit",
+                        class = "btn btn-success")
+
+ui <- fluidPage(
+    theme = shinythemes::shinytheme("simplex"),
+    sidebarLayout(
+    sidebarPanel(!!!stock_inputs,
+                 date_input,
+                 buttons,
+                 width = 2),
+    mainPanel(fluidRow(highchartOutput("portfolio_sharpe",
+                                       height = "500px",
+                                       width = "900px")),
+              fluidRow(
+                  useShinydashboard(),
+                  valueBoxOutput("box_portfolio"),
+                  valueBoxOutput("box_market")))
+))
+```
+
+```{r}
+server <- function(input, output, session) {
+    # calculate asset returns
+    asset_returns
+}
+```
+
+```{r}
+shinyApp(ui, server)
+```
