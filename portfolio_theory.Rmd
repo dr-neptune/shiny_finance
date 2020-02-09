@@ -630,7 +630,7 @@ highchart() %>%
     hc_xAxis(title = list(text = "Market Returns")) %>%
     hc_yAxis(title = list(text = "Portfolio Returns")) %>%
     hc_add_theme(hc_theme_flat()) %>%
-    hc_exporting(enabled = TRUE) 
+    hc_exporting(enabled = TRUE)
 ```
 
 # Shiny App CAPM
@@ -668,7 +668,7 @@ buttons <- fluidRow(
                         class = "btn btn-success")))
 
 ui <- fluidPage(
-    theme = shinythemes::shinytheme("paper"),
+    theme = shinythemes::shinytheme("flatly"),
     sidebarLayout(
         sidebarPanel(
             !!!stock_inputs,
@@ -676,417 +676,117 @@ ui <- fluidPage(
             br(),
             buttons),
         mainPanel(
-            fluidRow(renderHighchart("hchart_plot")),
-            fluidRow(renderTable("results")))))
+            fluidRow(highchartOutput("hchart_plot",
+                                     width = 800)),
+            fluidRow(tableOutput("results")))))
 ```
 
-<!-- ```{r} -->
-<!-- server <- function(input, output, session) { -->
-<!--     portfolio_tq <- eventReactive(input$go, { -->
-<!--         syms <- c(input$stock_SPY, input$stock_EFA, -->
-<!--                   input$stock_IJS, input$stock_EEM, -->
-<!--                   input$stock_AGG) -->
-
-<!--         prices <- get_prices(syms, input$date) -->
-
-<!--         weights <- c(input$wt_1 / 100, input$wt_2 / 100, -->
-<!--                      input$wt_3 / 100, input$wt_4 / 100, -->
-<!--                      input$wt_5 / 100) -->
-        
-<!--         # convert returns to a tibble -->
-<!--         portfolio_monthly <- prices() %>% -->
-<!--             to.monthly(indexAt = "lastof", OHLC = FALSE) %>% -->
-<!--             tk_tbl(preserve_index = TRUE, rename_index = "date") %>% -->
-<!--             gather(asset, returns, -date) %>% -->
-<!--             group_by(asset) %>% -->
-<!--             mutate(returns = (log(returns) - log(lag(returns)))) %>% -->
-<!--             na.omit() %>% -->
-<!--             tq_portfolio(assets_col = asset, -->
-<!--                          returns_col = returns, -->
-<!--                          weights = weights, -->
-<!--                          col_rename = "returns", -->
-<!--                          rebalance_on = "months")}) -->
-
-<!--     # calculate market return and convert it to a tibble -->
-<!--     market_return <- eventReactive(input$go, { -->
-<!--         market_return <- getSymbols("SPY", -->
-<!--                                     src = "yahoo", -->
-<!--                                     from = input$date, -->
-<!--                                     auto.assign = TRUE, -->
-<!--                                     warnings = FALSE) %>% -->
-<!--             map(., ~ Ad(get(.x))) %>% -->
-<!--             reduce(merge) %>% -->
-<!--             colnamer("SPY") %>% -->
-<!--             to.monthly(indexAt = "lastof", OHLC = FALSE) %>% -->
-<!--             tk_tbl(preserve_index = TRUE, -->
-<!--                    rename_index = "date") %>% -->
-<!--             mutate(returns = (log(SPY) - log(lag(SPY)))) %>% -->
-<!--             na.omit() %>% -->
-<!--             select(date, returns)}) -->
-
-<!--     # run regression and get beta -->
-<!--     beta_dplyr <- eventReactive(input$go, { -->
-<!--         beta_dplyr <- portfolio_monthly() %>% -->
-<!--             do(model = lm(returns ~ market_return()$returns, data = .))}) -->
-    
-<!--     # create augmented model for highcharter -->
-<!--     portfolio_augmented <- eventReactive(input$go, { -->
-<!--         beta_dplyr() %>% -->
-<!--             augment(model) %>% -->
-<!--             rename(mkt_rtns = market_return.returns) %>% -->
-<!--             select(returns, mkt_rtns, .fitted) %>% -->
-<!--             mutate(date = portfolio_monthly()$date)}) -->
-
-<!--     output$hchart_plot <- renderHighchart({ -->
-<!--         highchart() %>% -->
-<!--             hc_title(text = "Scatter with Regression") %>% -->
-<!--             hc_add_series(portfolio_augmented(), -->
-<!--                           type = "scatter", -->
-<!--                           color = "cornflowerblue", -->
-<!--                           hcaes(x = round(mkt_rtns, 4), -->
-<!--                                 y = round(mkt_rtns, 4), -->
-<!--                                 date = date), -->
-<!--                           name = "returns") %>% -->
-<!--             hc_add_series(portfolio_augmented(), -->
-<!--                           type = "line", -->
-<!--                           enableMouseTracking = FALSE, -->
-<!--                           hcaes(x = mkt_rtns, y = .fitted), -->
-<!--                           name = "CAPM Beta = Slope of Line") %>% -->
-<!--             hc_yAxis(title = list(text = "Market Returns")) %>% -->
-<!--             hc_yAxis(title = list(text = "Portfolio Returns")) %>% -->
-<!--             hc_add_theme(hc_theme_flat())}) -->
-
-<!--     output$returns <- renderTable({ -->
-<!--         beta_dplyr() %>% -->
-<!--             tidy(model) %>% -->
-<!--             mutate(term = c("alpha", "beta"))}, digits = 4) -->
-<!-- } -->
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- symbols <- c("SPY", "EFA", "IJS", "EEM", "AGG") -->
-
-<!-- server <- function(input, output, session) { -->
-<!--     prices <- eventReactive(input$go, { -->
-<!--         syms <- c(input$stock_SPY, input$stock_EFA, -->
-<!--                   input$stock_IJS, input$stock_EEM, -->
-<!--                   input$stock_AGG) -->
-        
-<!--         get_returns(syms, symbols, input$date)}) -->
-
-<!--     portfolio_returns_tq_rebalanced_monthly <- eventReactive(input$go, { -->
-<!--         prices <- prices() -->
-        
-<!--         # validate weights -->
-<!--         validate(need(input$wt_1 + input$wt_2 + -->
-<!--                      input$wt_3 + input$wt_4 + -->
-<!--                      input$wt_5 == 100, -->
-<!--                      "Portfolio weights must sum to 100%!")) -->
-        
-<!--         weights <- c(input$wt_1 / 100, input$wt_2 / 100, -->
-<!--                      input$wt_3 / 100, input$wt_4 / 100, -->
-<!--                      input$wt_5 / 100) -->
-
-<!--         portfolio_returns_tq_rebalanced_monthly <- prices %>% -->
-<!--             to.monthly(indexAt = "lastof", OHLC = FALSE) %>% -->
-<!--             tk_tbl(preserve_index = TRUE, rename_index = "date") %>% -->
-<!--             gather(asset, returns, -date) %>% -->
-<!--             group_by(asset) %>% -->
-<!--             mutate(returns = (log(returns) - log(lag(returns)))) %>% -->
-<!--             na.omit() %>% -->
-<!--             tq_portfolio(assets_col = asset, -->
-<!--                          returns_col = returns, -->
-<!--                          weights = weights, -->
-<!--                          col_rename = "returns", -->
-<!--                          rebalance_on = "months")}) -->
-
-<!--     # calculate market return and convert to a tibble -->
-<!--     market_return <- eventReactive(input$go, { -->
-<!--       market_return <- getSymbols("SPY", -->
-<!--                                   src = "yahoo", -->
-<!--                                   from = input$date, -->
-<!--                                   auto.assign = TRUE, -->
-<!--                                   warnings = FALSE) %>% -->
-<!--           map(., ~ Ad(get(.x))) %>% -->
-<!--           reduce(merge) %>% -->
-<!--           `colnames<-`("SPY") %>% -->
-<!--           to.monthly(indexAt = "lastof", OHLC = FALSE) %>% -->
-<!--           tk_tbl(preserve_index = TRUE, -->
-<!--                  rename_index = "date") %>% -->
-<!--           mutate(returns = (log(SPY) - log(lag(SPY)))) %>% -->
-<!--           na.omit() %>% -->
-<!--           select(date, returns)}) -->
-
-<!--     beta_dplyr_byhand <- eventReactive(input$go, { -->
-<!--         # portfolio_returns_tq_rebalanced_monthly <- portfolio_returns_tq_rebalanced_monthly() -->
-
-<!--         market_return <- market_return() -->
-
-<!--         beta_dplyr_byhand <- portfolio_returns_tq_rebalanced_monthly() %>% -->
-<!--             do(model = lm(returns ~ market_return$returns, data = .))}) -->
-
-<!--     portfolio_model_augmented <- eventReactive(input$go, { -->
-<!--         portfolio_returns_tq_rebalanced_monthly <- -->
-<!--             portfolio_returns_tq_rebalanced_monthly() -->
-
-<!--         beta_dplyr_byhand() %>% -->
-<!--             augment(model) %>% -->
-<!--             rename(mkt_rtns = market_return.returns) %>% -->
-<!--             select(returns, mkt_rtns, .fitted) %>% -->
-<!--             mutate(date = portfolio_returns_tq_rebalanced_monthly$date)}) -->
-
-<!--     output$hchart_plot <- renderHighchart({ -->
-<!--         portfolio_model_augmented <- portfolio_model_augmented() -->
-
-<!--         highchart() %>% -->
-<!--             hc_title(text = "Scatter with Regression Line") %>% -->
-<!--             hc_add_series(portfolio_model_augmented, -->
-<!--                           type = "scatter", -->
-<!--                           color = "cornflowerblue", -->
-<!--                           hcaes(x = round(mkt_rtns, 4), -->
-<!--                                 y = round(mkt_rtns, 4), -->
-<!--                                 date = date), -->
-<!--                           name = "Returns") %>% -->
-<!--             hc_add_series(portfolio_model_augmented, -->
-<!--                           type = "line", -->
-<!--                           enableMouseTracking = FALSE, -->
-<!--                           hcaes(x = mkt_rtns, y = .fitted), -->
-<!--                           name = "CAPM Beta = Slope of Line") %>% -->
-<!--             hc_xAxis(title = list(text = "Market Returns")) %>% -->
-<!--             hc_yAxis(title = list(text = "Portfolio Returns")) %>% -->
-<!--             hc_add_theme(hc_theme_flat()) %>% -->
-<!--             hc_exporting(enabled = TRUE)}) -->
-
-<!--     output$returns <- renderTable({ -->
-<!--         beta_dplyr_byhand() %>% -->
-<!--             tidy(model) %>% -->
-<!--             mutate(term = c("alpha", "beta"))}, digits = 4) -->
-<!-- } -->
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- get_prices <- function(syms, from_date) {  -->
-<!--     getSymbols(syms, -->
-<!--                src = "yahoo", -->
-<!--                from = from_date, -->
-<!--                auto.assign = TRUE, -->
-<!--                warnings = FALSE) %>% -->
-<!--         map(., ~ Ad(get(.x))) %>% -->
-<!--         reduce(merge) %>% -->
-<!--         colnamer(syms) -->
-<!-- } -->
-
-<!-- get_prices("SPY", "2012-12-31") %>% -->
-<!--     get_tq_returns(1) %>% -->
-<!--     .[["returns"]] -> market_returns_example -->
-
-<!-- get_prices(c("EFA", "IJS"), -->
-<!--            from_date = "2012-12-31") %>% -->
-<!--     get_tq_returns(weights = c(0.5, 0.5)) -> portfolio_returns_example -->
-
-<!-- get_tq_returns <- function(data, weights) {  -->
-<!--     data %>% -->
-<!--         to.monthly(indexAt = "lastof", -->
-<!--                    OHLC = FALSE) %>% -->
-<!--         tk_tbl(preserve_index = TRUE, -->
-<!--                rename_index = "date") %>% -->
-<!--         gather(asset, returns, -date) %>% -->
-<!--         group_by(asset) %>% -->
-<!--         mutate(returns = (log(returns) - log(lag(returns)))) %>%  -->
-<!--         tq_portfolio(assets_col = asset, -->
-<!--                      returns_col = returns, -->
-<!--                      weights = weights, -->
-<!--                      col_rename = "returns", -->
-<!--                      rebalance_on = "months") -->
-<!-- } -->
-
-<!-- augment_returns <- function(p_data, m_returns) { -->
-<!--     lmod <- lm(returns ~ m_returns, data = p_data) -->
-
-<!--     augment(lmod) %>% -->
-<!--         rename("mkt_rtns" = 2) %>% -->
-<!--         select(1:3) %>% -->
-<!--         add_column("date" = p_data[["date"]]) -->
-<!-- } -->
-
-<!-- augment_returns(portfolio_returns_example, -->
-<!--                 market_returns_example) -->
-
-<!-- alpha_beta_table <- function(data, m_returns) { -->
-<!--         data %>% -->
-<!--             do(model = lm(returns ~ m_returns, -->
-<!--                           data = .)) %>% -->
-<!--             tidy(model) %>% -->
-<!--             mutate(term = c("alpha", "beta")) -->
-<!-- } -->
-
-<!-- alpha_beta_table(portfolio_returns_example, -->
-<!--                  market_returns_example) -->
-
-<!-- server <- function(input, output, session) { -->
-<!--     # get data -->
-<!--     prices <- eventReactive(input$go, { -->
-<!--         # place parameters in vectors -->
-<!--         syms <- c(input$stock_SPY, input$stock_EFA, -->
-<!--                   input$stock_IJS, input$stock_EEM, -->
-<!--                   input$stock_AGG) -->
-
-<!--         # get prices of the symbols -->
-<!--         get_prices(syms, input$date)}) -->
-
-<!--     portfolio_returns <- eventReactive(input$go, { -->
-<!--         weights <- c(input$wt_1 / 100, input$wt_2 / 100, -->
-<!--                      input$wt_3 / 100, input$wt_4 / 100, -->
-<!--                      input$wt_5 / 100) -->
-        
-<!--         prices() %>% -->
-<!--             get_tq_returns(weights = weights)}) -->
-
-<!--     market_returns <- eventReactive(input$go, { -->
-<!--         get_prices(syms = "SPY", -->
-<!--                    from_date = input$date) %>% -->
-<!--             get_tq_returns(weights = 1) %>% -->
-<!--             select(date, returns)}) -->
-
-<!--     # transform data -->
-<!--     beta <- eventReactive(input$go, { -->
-<!--         portfolio_returns() %>% -->
-<!--             augment_returns(m_returns = market_returns()$returns)}) -->
-
-<!--     # plot data -->
-<!--     output$hchart_plot <- renderHighchart({ -->
-<!--         highchart() %>% -->
-<!--             hc_title(text = "Scatter with Regression Line") %>% -->
-<!--             hc_add_series(beta(), -->
-<!--                           type = "scatter", -->
-<!--                           color = "cornflowerblue", -->
-<!--                           hcaes(x = round(mkt_rtns, 4), -->
-<!--                                 y = round(returns, 4), -->
-<!--                                 date = date), -->
-<!--                           name = "Returns") %>% -->
-<!--             hc_add_series(beta(), -->
-<!--                           type = "line", -->
-<!--                           enableMouseTracking = FALSE, -->
-<!--                           hcaes(x = mkt_rtns, y = .fitted), -->
-<!--                           name = "CAPM Beta = Slope of Line") %>% -->
-<!--             hc_xAxis(title = list(text = "Market Returns")) %>% -->
-<!--             hc_yAxis(title = list(text = "Portfolio Returns")) %>% -->
-<!--             hc_add_theme(hc_theme_flat()) %>% -->
-<!--             hc_exporting(enabled = TRUE)}) -->
-
-<!--     # plot table -->
-<!--     output$results <- renderTable({ -->
-<!--         portfolio_returns() %>% -->
-<!--             alpha_beta_table(m_returns = market_returns())}, -->
-<!--         digits = 4) -->
-<!-- } -->
-<!-- ``` -->
-
 ```{r}
+get_prices <- function(syms, from_date) {
+    getSymbols(syms,
+               src = "yahoo",
+               from = from_date,
+               auto.assign = TRUE,
+               warnings = FALSE) %>%
+        map(., ~ Ad(get(.x))) %>%
+        reduce(merge) %>%
+        colnamer(syms)
+}
+
+get_tq_returns <- function(data, weights) {
+    data %>%
+        to.monthly(indexAt = "lastof",
+                   OHLC = FALSE) %>%
+        tk_tbl(preserve_index = TRUE,
+               rename_index = "date") %>%
+        gather(asset, returns, -date) %>%
+        group_by(asset) %>%
+        mutate(returns = (log(returns) - log(lag(returns)))) %>%
+        tq_portfolio(assets_col = asset,
+                     returns_col = returns,
+                     weights = weights,
+                     col_rename = "returns",
+                     rebalance_on = "months")
+}
+
+augment_returns <- function(p_data, m_returns) {
+    lmod <- lm(returns ~ m_returns, data = p_data)
+
+    augment(lmod) %>%
+        rename("mkt_rtns" = 2) %>%
+        select(1:3) %>%
+        add_column("date" = p_data[["date"]])
+}
+
+alpha_beta_table <- function(data, m_returns) {
+        data %>%
+            do(model = lm(returns ~ m_returns$returns,
+                          data = data)) %>%
+            tidy(model) %>%
+            mutate(term = c("alpha", "beta"))
+}
+
 server <- function(input, output, session) {
+    # get data
     prices <- eventReactive(input$go, {
+        # place parameters in vectors
         syms <- c(input$stock_SPY, input$stock_EFA,
                   input$stock_IJS, input$stock_EEM,
                   input$stock_AGG)
+
+        # get prices of the symbols
+        get_prices(syms, input$date)})
+
+    portfolio_returns <- eventReactive(input$go, {
+        weights <- c(input$wt_1 / 100, input$wt_2 / 100,
+                     input$wt_3 / 100, input$wt_4 / 100,
+                     input$wt_5 / 100) 
         
-        getSymbols(syms,
-                   src = 'yahoo',
-                   from = input$date, 
-                   auto.assign = TRUE,
-                   warnings = FALSE) %>% 
-            map(., ~ Ad(get(.x))) %>% 
-            reduce(merge) %>%
-            `colnames<-`(symbols)})
+        prices() %>% 
+            get_tq_returns(weights = weights)}) 
 
-
-    market_return <- eventReactive(input$go, {
-        market_return <- 
-            getSymbols("SPY",
-                       src = 'yahoo',
-                       from = input$date, 
-                       auto.assign = TRUE,
-                       warnings = FALSE) %>% 
-            map(., ~ Ad(get(.x))) %>% 
-            reduce(merge) %>%
-            `colnames<-`("SPY") %>% 
-            to.monthly(indexAt = "lastof", OHLC = FALSE) %>% 
-            tk_tbl(preserve_index = TRUE, rename_index = "date") %>%
-            mutate(returns = (log(SPY) - log(lag(SPY)))) %>% 
-            na.omit() %>%
+    market_returns <- eventReactive(input$go, { 
+        get_prices(syms = "SPY", 
+                   from_date = input$date) %>% 
+            get_tq_returns(weights = 1) %>% 
             select(date, returns)})
+    
+     # transform data 
+    beta <- eventReactive(input$go, { 
+        portfolio_returns() %>% 
+            augment_returns(m_returns = market_returns()$returns)}) 
 
-
-    portfolio_returns_tq_rebalanced_monthly <- eventReactive(input$go, {  
-        prices <- prices()
-        
-        w <- c(input$w1/100, input$w2/100, input$w3/100, input$w4/100, input$w5/100)
-        
-        portfolio_returns_tq_rebalanced_monthly <- 
-            prices %>% 
-            to.monthly(indexAt = "lastof", OHLC = FALSE) %>% 
-            tk_tbl(preserve_index = TRUE, rename_index = "date") %>%
-            gather(asset, returns, -date) %>% 
-            group_by(asset) %>%  
-            mutate(returns = (log(returns) - log(lag(returns)))) %>% 
-            na.omit() %>%
-            tq_portfolio(assets_col  = asset, 
-                         returns_col = returns,
-                         weights     = w,
-                         col_rename  = "returns",
-                         rebalance_on = "months")})
-
-    beta_dplyr_byhand <- eventReactive(input$go, {
-        market_return <- market_return()
-  
-        beta_dplyr_byhand <- 
-            portfolio_returns_tq_rebalanced_monthly() %>% 
-            do(model = lm(returns ~ market_return$returns, data = .))})
-  
-    portfolio_model_augmented <- eventReactive(input$go, {
-        portfolio_returns_tq_rebalanced_monthly <- portfolio_returns_tq_rebalanced_monthly()
-  
-        beta_dplyr_byhand() %>% 
-            augment(model) %>% 
-            rename(mkt_rtns = market_return.returns) %>% 
-            select(returns, mkt_rtns, .fitted) %>% 
-            mutate(date = portfolio_returns_tq_rebalanced_monthly$date)})
-
-    output$hchart_plot <- renderHighchart({
-
-        portfolio_model_augmented <- portfolio_model_augmented()
-
+     # plot data 
+    output$hchart_plot <- renderHighchart({ 
         highchart() %>% 
             hc_title(text = "Scatter with Regression Line") %>% 
-            hc_add_series(portfolio_model_augmented, 
-                          type = "scatter",
-                          color = "cornflowerblue",
+            hc_add_series(beta(), 
+                          type = "scatter", 
+                          color = "cornflowerblue", 
                           hcaes(x = round(mkt_rtns, 4), 
-                                y = round(returns, 4),
+                                y = round(returns, 4), 
                                 date = date), 
-                          name = "Returns") %>%
-            hc_add_series(portfolio_model_augmented, 
+                          name = "Returns") %>% 
+            hc_add_series(beta(), 
                           type = "line", 
-                          enableMouseTracking = FALSE,
+                          enableMouseTracking = FALSE, 
                           hcaes(x = mkt_rtns, y = .fitted), 
                           name = "CAPM Beta = Slope of Line") %>% 
             hc_xAxis(title = list(text = "Market Returns")) %>% 
             hc_yAxis(title = list(text = "Portfolio Returns")) %>% 
-            hc_tooltip(formatter = JS("function(){
-     return ('port return: ' + this.y + '  mkt return: ' + this.x +  
-     '  date: ' + this.point.date)}"))%>% 
-         hc_add_theme(hc_theme_flat()) %>%
-         hc_exporting(enabled = TRUE)})
+            hc_add_theme(hc_theme_flat()) %>% 
+            hc_exporting(enabled = TRUE)}) 
 
+     # plot table 
     output$results <- renderTable({
-        beta_dplyr_byhand() %>% 
-            tidy(model) %>% 
-            mutate(term = c("alpha", "beta"))
-    }, digits = 4)
-}
+        portfolio_returns() %>% 
+            alpha_beta_table(data = .,
+                             m_returns = market_returns())}, 
+        digits = 4)}
 ```
 
 ```{r}
-shinyApp(ui, server)
+# shinyApp(ui, server)
 ```
 
 Running the book authors code doesn't work

@@ -259,7 +259,7 @@ ui <- fluidPage(
                  tabPanel("Stacked Area Chart",
                           highchartOutput("hchart_stacked"))),
               fluidRow("barchart",
-                       renderPlot("gg_out")))))
+                       plotOutput("gg_out")))))
 ```
 
 ```{r}
@@ -391,7 +391,7 @@ server <- function(input, output, session) {
 ```
 
 ```{r}
-# shinyApp(ui, server)
+shinyApp(ui, server)
 ```
 
 # Monte Carlo Simulation
