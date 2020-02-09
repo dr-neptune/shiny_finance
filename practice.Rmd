@@ -253,23 +253,351 @@ ui <- fluidPage(
                  date_input,
                  buttons,
                  width = 2),
-    mainPanel(fluidRow(highchartOutput("portfolio_sharpe",
-                                       height = "500px",
-                                       width = "900px")),
-              fluidRow(
-                  useShinydashboard(),
-                  valueBoxOutput("box_portfolio"),
-                  valueBoxOutput("box_market")))
-))
+    mainPanel(
+        fluidRow(tabPanel("Asset Contribution",
+                          highchartOutput("hchart_contrib")),
+                 tabPanel("Stacked Area Chart",
+                          highchartOutput("hchart_stacked"))),
+              fluidRow("barchart",
+                       renderPlot("gg_out")))))
 ```
 
 ```{r}
 server <- function(input, output, session) {
     # calculate asset returns
-    asset_returns
+    asset_returns_dplyr <- eventReactive(input$go, {
+        syms <- c(input$stock_SPY, input$stock_EFA,
+                  input$stock_IJS, input$stock_EEM,
+                  input$stock_AGG)
+        
+        prices <- getSymbols(syms,
+                             src = "yahoo",
+                             from = input$date,
+                             auto.assign = TRUE,
+                             warnings = FALSE) %>%
+            map(., ~ Ad(get(.x))) %>%
+            reduce(merge) %>%
+            colnamer(syms)
+
+        asset_returns_dplyr <- prices %>%
+            to.monthly(indexAt = "last", OHLC = FALSE) %>%
+            tk_tbl(preserve_index = TRUE,
+                   rename_index = "date") %>%
+            gather(asset, returns, -date) %>%
+            group_by(asset) %>%
+            mutate(returns = (log(returns) - log(lag(returns)))) %>%
+            spread(asset, returns) %>%
+            select(date, symbols) %>%
+            slice(-1)})
+
+    # calculate overall contribution to risk
+    percentages_tibble <- eventReactive(input$go, {
+        weights <- c(input$wt_1 / 100, input$wt_2 / 100,
+                     input$wt_3 / 100, input$wt_4 / 100,
+                     input$wt_5 / 100)
+
+        asset_returns_xts <- asset_returns_dplyr() %>%
+            tk_xts(date_col = date)
+
+        port_vol_contr <- StdDev(asset_returns_xts,
+                                 weights = weights,
+                                 portfolio_method = "component")
+
+        percentages_tibble <- port_vol_contr$pct_contrib_StdDev %>%
+            tk_tbl(preserve_index = FALSE) %>%
+            mutate(asset = symbols) %>%
+            rename("risk_contribution" = data) %>%
+            mutate(risk_contribution = round(risk_contribution, 4) * 100,
+                   weights = weights * 100) %>%
+            select(asset, everything())})
+
+    # calculate rolling contribution to stddev
+    portfolio_vol_comps_xts <- eventReactive(input$go, {
+        asset_returns_dplyr <- asset_returns_dplyr()
+
+        map_df(1:(nrow(asset_returns_dplyr) - input$window),
+               interval_sd(asset_returns = asset_returns_dplyr,
+                           weights = weights,
+                           start_date = 1,
+                           window = input$window)) %>%
+            tk_xts(date_col = date) -> portfolio_vol_comps_xts})
+
+    output$hchart_contrib <- renderHighchart({
+        port_vol_comps <- portfolio_vol_comps_xts()
+
+        highchart(type = "stock") %>%
+            hc_title(text = "Volatility Contribution") %>%
+            hc_add_series(port_vol_comps[, 1],
+                          name = names(port_vol_comps[, 1])) %>%
+            hc_add_series(port_vol_comps[, 2],
+                          name = names(port_vol_comps[, 2])) %>%
+            hc_add_series(port_vol_comps[, 3],
+                          name = names(port_vol_comps[, 3])) %>%
+            hc_add_series(port_vol_comps[, 4],
+                          name = names(port_vol_comps[, 4])) %>%
+            hc_add_series(port_vol_comps[, 5],
+                          name = names(port_vol_comps[, 5])) %>%
+            hc_add_theme(hc_theme_flat()) %>%
+            hc_yAxis(labels = list(format = "{value}%"),
+                     opposite = FALSE,
+                     min = min(port_vol_comps) - 5,
+                     max = max(port_vol_comps) + 5) %>%
+            hc_navigator(enabled = FALSE) %>%
+            hc_scrollbar(enabled = FALSE)})
+
+
+    output$hchart_stacked <- renderHighchart({
+        port_vol_comps <- portfolio_vol_comps_xts()
+
+        highchart() %>%
+            hc_chart(type = "area") %>%
+            hc_title(text = "Stacked Volatility Contribution") %>%
+            hc_plotOptions(area = list(
+                               stacking = "percent",
+                               lineColor = "#ffffff",
+                               lineWidth = 1,
+                               marker = list(
+                                   lineWidth = 1,
+                                   lineColor = "#ffffff"))) %>% 
+            hc_add_series(port_vol_comps[, 1],
+                          name = names(port_vol_comps[, 1])) %>%
+            hc_add_series(port_vol_comps[, 2],
+                          name = names(port_vol_comps[, 2])) %>%
+            hc_add_series(port_vol_comps[, 3],
+                          name = names(port_vol_comps[, 3])) %>%
+            hc_add_series(port_vol_comps[, 4],
+                          name = names(port_vol_comps[, 4])) %>%
+            hc_add_series(port_vol_comps[, 5],
+                          name = names(port_vol_comps[, 5])) %>%
+            hc_add_theme(hc_theme_flat()) %>%
+            hc_yAxis(labels = list(format = "{value}%"),
+                     opposite = FALSE) %>%
+            hc_xAxis(type = "datetime") %>% 
+            hc_navigator(enabled = FALSE) %>%
+            hc_scrollbar(enabled = FALSE) %>%
+            hc_legend(enabled = TRUE)}) 
+
+    output$gg_out <- renderPlot({
+        percentages_tibble() %>%
+            gather(type, percent, -asset) %>%
+            group_by(type) %>%
+            mutate(percent = percent / 100) %>%
+            ggplot(aes(x = asset, y = percent, fill = type)) +
+            geom_col(position = "dodge") +
+            scale_y_continuous(labels = scales::percent) +
+            ggtitle("Percent Contribution to Volatility")})
 }
+
 ```
 
 ```{r}
-shinyApp(ui, server)
+# shinyApp(ui, server)
+```
+
+# Monte Carlo Simulation
+
+## Simulating Growth of a Dollar
+
+```{r}
+mean_port_return <- mean(portfolio_tq$returns)
+stddev_port_return <- sd(portfolio_tq$returns)
+```
+
+Now we can use the rnorm function to create a distribution with mean and sd equal to our portfolio.
+
+```{r}
+simulated_monthly_returns <- rnorm(120,
+                                   mean_port_return,
+                                   stddev_port_return)
+```
+
+Next we calculate how a dollar would have grown given those random monthly returns. We first add a 1 to each of our monthly returns, since we start with $1
+
+```{r}
+(sim_returns_add_1 <- tibble(c(1, 1 + simulated_monthly_returns)) %>%
+    colnamer("returns"))
+```
+
+This data can now be converted into the cumulative growth of a dollar. 
+
+```{r}
+(simulated_growth <- sim_returns_add_1 %>%
+    mutate(growth = accumulate(returns, `*`)))
+```
+
+Are these values reasonable? What compound annual growth rate (CAGR) is implied by this simulation?
+
+```{r}
+(cagr <- ((simulated_growth$growth[nrow(simulated_growth)] ^ (1 / 10)) - 1) * 100)
+```
+
+# Several Simulation Functions
+
+```{r}
+sim_accum <- function(init, N, mean, stddev) {
+    tibble(c(init, 1 + rnorm(N, mean, stddev))) %>%
+        colnamer("returns") %>%
+        mutate(growth = accumulate(returns, `*`)) %>%
+        select(growth)}
+
+sim_accum(1, 120, mean_port_return, stddev_port_return)
+```
+
+# Running Multiple Simulations
+
+Suppose we wish to run 50 simulations to get a feel for how the randomness is distributed. 
+
+```{r}
+sims <- 50
+(starts <- rep(1, sims) %>%
+    set_names(paste0("sim_", 1:sims)))
+```
+
+We will store the results of our simulations in starts.
+
+We want to apply our simulation function to each of the 50 columns of the starts matrix. 
+
+map_dfc() takes a vector and applies a function to it. In this case, each column of starts.
+
+```{r}
+monte_carlo_sim_50 <- map_dfc(starts, ~ sim_accum(.x, 120,
+                                                  mean_port_return,
+                                                  stddev_port_return))
+
+monte_carlo_sim_50 %>% tail()
+```
+
+We now have 50 simulations of the growth of the dollar and we simulated that growth over 120 months. To visualize this, we still need a month column. 
+
+```{r}
+monte_carlo_sim_50 %>%
+    mutate(month = seq(1:nrow(.))) %>%
+    select(month, everything()) %>%
+    colnamer(c("month", names(starts))) %>%
+    mutate_all(~ round(.x, 2))
+```
+
+An alternative method is to use the rerun() function from purrr. 
+
+```{r}
+monte_carlo_rerun <- rerun(5, sim_accum(1, 120,
+                                        mean_port_return,
+                                        stddev_port_return))
+```
+
+We now have 5 dataframes in a list. We can consolidate that list into one tibble.
+
+```{r}
+set.seed(8888)
+
+reruns <- 50
+
+monte_carlo_rerun <- rerun(reruns,
+                           sim_accum(1, 120,
+                                     mean_port_return,
+                                     stddev_port_return)) %>%
+    simplify_all() %>%
+    `names<-`(paste0("sim_", 1:reruns)) %>%
+    as_tibble() %>%
+    mutate(month = seq(1:nrow(.))) %>%
+    select(month, everything())
+```
+
+# Visualizing Simulations with ggplot
+
+```{r}
+monte_carlo_rerun %>%
+    gather(sim, growth, -month) %>%
+    group_by(sim) %>%
+    ggplot(aes(x = month, y = growth, color = sim)) +
+    geom_line() +
+    theme(legend.position = "none")
+```
+
+We can check the min, max, and median simulations with summarize
+
+```{r}
+(sim_sum <- monte_carlo_rerun %>%
+    gather(sim, growth, -month) %>%
+    group_by(sim) %>%
+     summarize(final = last(growth)) %>%
+     summarise(max = max(final),
+               min = min(final),
+               median = median(final)))
+```
+
+```{r}
+monte_carlo_rerun %>%
+    gather(sim, growth, -month) %>%
+    group_by(sim) %>%    
+    filter(last(growth) == sim_sum$max ||
+           last(growth) == sim_sum$median ||
+           last(growth) == sim_sum$min) %>%
+    ggplot(aes(x = month, y = growth)) +
+    geom_line(aes(color = sim))
+```
+
+Since we have a large range of possible end values, let's examine the quantiles for those values
+
+```{r}
+probs <- c(.005, .025, .25, .5, .75, .975, .995)
+
+sim_final_quantile <- monte_carlo_rerun %>%
+    gather(sim, growth, -month) %>%
+    group_by(sim) %>%
+     summarise(final = last(growth))
+
+(quantiles <- quantile(sim_final_quantile$final, probs = probs) %>%
+    tibble() %>%
+    colnamer("value") %>%
+    mutate(probs = probs) %>%
+    spread(probs, value))
+```
+
+# Visualizing Simulations with Highcharter
+
+```{r}
+mc_gathered <- monte_carlo_rerun %>%
+    gather(sim, growth, -month) %>%
+    group_by(sim)
+```
+
+```{r}
+mc_gathered %>%
+    hchart(type = "line",
+           hcaes(y = growth,
+                 x = month,
+                 group = sim)) %>%
+    hc_title(text = "50 Simulations") %>%
+    hc_xAxis(title = list(text = "months")) %>%
+    hc_yAxis(title = list(text = "dollar growth"),
+             labels = list(format = "${value}")) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_exporting(enabled = TRUE) %>%
+    hc_legend(enabled = FALSE)
+```
+
+```{r}
+mc_gathered %>%
+    filter(last(growth) == sim_sum$max ||
+           last(growth) == sim_sum$median ||
+           last(growth) == sim_sum$min) %>%
+    group_by(sim) %>%
+    hchart(type = "line",
+           hcaes(y = growth,
+                 x = month,
+                 group = sim)) %>%
+    hc_title(text = "Min, Max, Median Simulations") %>%
+    hc_xAxis(title = list(text = "months")) %>%
+    hc_yAxis(title = list(text = "dollar growth"),
+             labels = list(format = "${value}")) %>%
+    hc_add_theme(hc_theme_flat()) %>%
+    hc_exporting(enabled = TRUE) %>%
+    hc_legend(enabled = FALSE)
+```
+
+# Shiny App Monte Carlo
+
+```{r}
+
 ```

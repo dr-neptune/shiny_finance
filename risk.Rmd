@@ -918,5 +918,5 @@ server <- function(input, output, session) {
                         mean = FALSE, median = FALSE)})
 }
 
-shinyApp(ui, server)
+# shinyApp(ui, server)
 ```
